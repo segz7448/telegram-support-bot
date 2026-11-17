@@ -274,3 +274,21 @@ func TestNigeriaHolidays(t *testing.T) {
 		t.Fatalf("range: %q", r)
 	}
 }
+
+func TestSunriseSunset(t *testing.T) {
+	tl, f, _ := newFake(t)
+	f.routes["wttr.in/6.4541,3.3947"] = `{"current_condition":[{"temp_C":"27"}],"weather":[{"date":"2026-11-17","astronomy":[{"sunrise":"06:36 AM","sunset":"06:26 PM"}],"hourly":[]}]}`
+	r, ok := tl.Pre("what time is sunrise and sunset in lagos")
+	if !ok || !strings.Contains(r, "sunrise 06:36 AM, sunset 06:26 PM") || !strings.Contains(r, "2026-11-17") || !strings.Contains(r, "local time there") {
+		t.Fatalf("sun: %v %q", ok, r)
+	}
+	f.routes["wttr.in/6.4541,3.3947"] = `{"weather":[{"date":"2026-11-17","astronomy":[{"sunrise":"<b>x</b> http://evil.test","sunset":"06:26 PM"}]}]}`
+	tl2, f2, _ := newFake(t)
+	f2.routes["wttr.in/6.4541,3.3947"] = f.routes["wttr.in/6.4541,3.3947"]
+	if r, _ := tl2.Pre("sunrise in lagos"); strings.Contains(r, "evil.test") || !strings.Contains(r, "couldn't read") {
+		t.Fatalf("hostile: %q", r)
+	}
+	if r, _ := tl.Pre("weather in lagos"); strings.Contains(r, "Sun in") {
+		t.Fatalf("plain weather polluted: %q", r)
+	}
+}

@@ -173,11 +173,14 @@ func (t *Tools) Pre(text string) (string, bool) {
 	if r, ok := t.ngHoliday(low); ok {
 		return r, true
 	}
+	if m := reSun.FindStringSubmatch(low); m != nil {
+		return t.weatherF(strings.TrimSpace(m[1]), false, true), true
+	}
 	if m := reWx.FindStringSubmatch(low); m != nil {
-		return t.weatherF(strings.TrimSpace(m[1]), strings.Contains(low, "forecast")), true
+		return t.weatherF(strings.TrimSpace(m[1]), strings.Contains(low, "forecast"), false), true
 	}
 	if m := reWx2.FindStringSubmatch(low); m != nil && len(strings.Fields(m[1])) <= 2 {
-		return t.weatherF(strings.TrimSpace(m[1]), strings.Contains(low, "forecast")), true
+		return t.weatherF(strings.TrimSpace(m[1]), strings.Contains(low, "forecast"), false), true
 	}
 	if m := reDefPre.FindStringSubmatch(low); m != nil && len(strings.Fields(m[1])) <= 3 {
 		return t.define(strings.TrimSpace(m[1])), true
@@ -559,16 +562,19 @@ func (t *Tools) currency(v float64, from, to string) string {
 
 var wxDesc = regexp.MustCompile(`\s+`)
 
-func (t *Tools) weather(place string) string { return t.weatherF(place, false) }
+func (t *Tools) weather(place string) string { return t.weatherF(place, false, false) }
 
 // weatherF with forecast=true adds a per-day outlook (up to 3 days) taken from the same wttr.in response: no extra request.
-func (t *Tools) weatherF(place string, forecast bool) string {
+func (t *Tools) weatherF(place string, forecast, sun bool) string {
 	if place == "" || len(place) > 60 {
 		return "Tell me the place, like: weather in Lagos."
 	}
 	key := "wx|" + place
 	if forecast {
 		key = "wxf|" + place
+	}
+	if sun {
+		key = "wxs|" + place
 	}
 	if r, ok := t.cached(key, 10*time.Minute); ok {
 		return r
@@ -602,6 +608,9 @@ func (t *Tools) weatherF(place string, forecast bool) string {
 	var raw map[string]any
 	if json.Unmarshal(b, &raw) != nil {
 		return fmt.Sprintf(unreachable, "the weather service")
+	}
+	if sun {
+		return sunReply(raw, place, geoName(r.Name, r.Admin1, r.Country), t, key)
 	}
 	cc, _ := raw["current_condition"].([]any)
 	if len(cc) == 0 {
@@ -842,4 +851,38 @@ func cleanDate(s string) string {
 		return s
 	}
 	return "day"
+}
+
+var reSun = regexp.MustCompile(`^(?:what(?:'s| is| time is) )?(?:the )?(?:sunrise|sunset|sun rise|sun set)(?: and (?:sunrise|sunset))?(?: time| times)?\s+(?:in|for|at|of)\s+(.+)$`)
+
+func geoName(name, admin, country string) string {
+	n := name
+	if admin != "" && admin != name {
+		n += ", " + admin
+	}
+	return n + ", " + country
+}
+
+// sunReply reads sunrise and sunset for today from the wttr.in astronomy block of the same weather response (no
+// extra request, no calculation of my own). Times are local to the place.
+func sunReply(raw map[string]any, place, name string, t *Tools, key string) string {
+	ds, _ := raw["weather"].([]any)
+	if len(ds) == 0 {
+		return fmt.Sprintf(unreachable, "the weather service")
+	}
+	d, _ := ds[0].(map[string]any)
+	as, _ := d["astronomy"].([]any)
+	if len(as) == 0 {
+		return "The weather service gave no sun times for that place."
+	}
+	a, _ := as[0].(map[string]any)
+	g := func(k string) string { s, _ := a[k].(string); return strings.TrimSpace(s) }
+	reTime := regexp.MustCompile(`^\d{1,2}:\d{2} (?:AM|PM)$`)
+	rise, set := g("sunrise"), g("sunset")
+	if !reTime.MatchString(rise) || !reTime.MatchString(set) {
+		return "The weather service gave sun times I couldn't read for that place."
+	}
+	reply := fmt.Sprintf("Sun in %s on %s: sunrise %s, sunset %s (local time there).\nPlace matched by name (first result), so check it's the right one. Source: wttr.in astronomy data with Open-Meteo place search.", name, cleanDate(func() string { s, _ := d["date"].(string); return s }()), rise, set)
+	t.store(key, reply)
+	return reply
 }
