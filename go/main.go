@@ -109,7 +109,7 @@ func main() {
 		chat.Games = []GameHandler{chat.Chess, &Connect4{Path: os.Getenv("TG_C4_FILE")}, &Reversi{Path: os.Getenv("TG_REVERSI_FILE")}, &Draughts{Path: os.Getenv("TG_DRAUGHTS_FILE")}, &Ludo{Path: os.Getenv("TG_LUDO_FILE")}, &QR{}}
 		chat.Notes = &Notes{Path: os.Getenv("TG_NOTES_FILE")}
 		chat.Admin = &Admin{Owner: strings.TrimSpace(os.Getenv("TG_OWNER_ID")), Version: "tgbot " + Version, Start: time.Now(), Know: chat.Know, Notes: chat.Notes, Rem: chat.Rem, News: chat.News}
-		if os.Getenv("TG_FX_FALLBACK") == "1" {
+		if os.Getenv("TG_FX_FALLBACK") != "0" { // on by default; TG_FX_FALLBACK=0 turns it off
 			tools.ErAPI = "https://open.er-api.com/v6/latest/USD"
 		}
 		tools.General = true
