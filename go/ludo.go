@@ -26,14 +26,15 @@ import (
 // Safe squares (no capture) are the four start squares and the four star squares: 1, 9, 14, 22, 27, 35, 40, 48.
 
 type LudoSave struct {
-	Level   int       `json:"level"`
-	Tok     [2][4]int `json:"tok"`
-	Roll    int       `json:"roll"` // pending human roll (0 = none rolled yet)
-	Sixes   int       `json:"sixes"`
-	Over    bool      `json:"over"`
-	Result  string    `json:"result,omitempty"`
-	Turns   int       `json:"turns"`
-	LastMsg string    `json:"-"`
+	Level    int       `json:"level"`
+	Tok      [2][4]int `json:"tok"`
+	Roll     int       `json:"roll"` // pending human roll (0 = none rolled yet)
+	Sixes    int       `json:"sixes"`
+	curSixes int       `json:"-"` // consecutive 6s the side to move has already rolled this turn (including the roll being played); search state only
+	Over     bool      `json:"over"`
+	Result   string    `json:"result,omitempty"`
+	Turns    int       `json:"turns"`
+	LastMsg  string    `json:"-"`
 }
 
 type ludoFile struct {
@@ -232,6 +233,7 @@ func (l *Ludo) botTurn(g *LudoSave) string {
 		if len(lg) == 0 {
 			story = append(story, fmt.Sprintf("I rolled %d: no legal move.", r))
 		} else {
+			g.curSixes = sixes
 			i := l.choose(g, 1, r, g.Level, lg)
 			cap := g.move(1, i, r)
 			t := fmt.Sprintf("I rolled %d and moved token %s", r, tokName(i))
@@ -661,7 +663,7 @@ func abs2(v int) int {
 // expectimax: value for side `me` after a move, looking `depth` further moves ahead. Dice are chance nodes (1/6
 // each); the mover maximises (me) or minimises (opponent) the same evaluation, and a 6 gives the same side the next
 // move. It is a plain search over our own evaluation function: no learning, no model.
-func (g *LudoSave) expectimax(me, mover, depth int) float64 {
+func (g *LudoSave) expectimax(me, mover, sixes, depth int) float64 {
 	if g.won(me) {
 		return 1000
 	}
@@ -673,13 +675,18 @@ func (g *LudoSave) expectimax(me, mover, depth int) float64 {
 	}
 	total := 0.0
 	for r := 1; r <= 6; r++ {
-		lg := g.legal(mover, r)
-		next := 1 - mover
+		next, ns := 1-mover, 0
 		if r == 6 {
+			ns = sixes + 1
+			if ns == 3 { // third 6 in a row: the roll is not played and the turn passes (earlier moves stay)
+				total += g.expectimax(me, 1-mover, 0, depth-1)
+				continue
+			}
 			next = mover
 		}
+		lg := g.legal(mover, r)
 		if len(lg) == 0 {
-			total += g.expectimax(me, next, depth-1)
+			total += g.expectimax(me, next, ns, depth-1)
 			continue
 		}
 		best := -1e18
@@ -689,7 +696,7 @@ func (g *LudoSave) expectimax(me, mover, depth int) float64 {
 		for _, i := range lg {
 			h := g.clone()
 			cap := h.move(mover, i, r)
-			v := h.expectimax(me, next, depth-1)
+			v := h.expectimax(me, next, ns, depth-1)
 			if cap {
 				if mover == me {
 					v += 8
@@ -717,11 +724,11 @@ func (l *Ludo) chooseExpectimax(g *LudoSave, side, roll, level int, legal []int)
 	for _, i := range legal {
 		h := g.clone()
 		cap := h.move(side, i, roll)
-		next := 1 - side
+		next, ns := 1-side, 0
 		if roll == 6 {
-			next = side
+			next, ns = side, g.curSixes
 		}
-		v := h.expectimax(side, next, depth)
+		v := h.expectimax(side, next, ns, depth)
 		if cap {
 			v += 8
 		}

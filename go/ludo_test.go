@@ -72,6 +72,7 @@ func ludoSim(l *Ludo, lv [2]int, rnd *rand.Rand) int { // returns winner 0/1, -1
 			}
 			lg := g.legal(side, r)
 			if len(lg) > 0 {
+				g.curSixes = sixes
 				i := l.choose(g, side, r, lv[side], lg)
 				g.move(side, i, r)
 				if g.won(side) {
@@ -220,5 +221,35 @@ func TestLudoSearchStrength(t *testing.T) {
 			}
 		}
 		t.Logf("level %d vs level %d, %d games alternating first: %d wins (%.1f%%)", pair[0], pair[1], n, w, 100*float64(w)/float64(n))
+	}
+}
+
+// Regression: the search must carry the consecutive-six count. With two sixes already rolled, a 6 now means the
+// next roll is the third 6 chance: the bot's own extra roll is only worth 5/6 of a normal one, and the opponent
+// gets the turn after a forfeit. These fixtures check the exact expectimax values on tiny positions.
+func TestLudoSearchThreeSixes(t *testing.T) {
+	g := &LudoSave{}
+	g.Tok[0] = [4]int{-1, -1, -1, -1}
+	g.Tok[1] = [4]int{-1, -1, -1, -1}
+	g.Tok[0][0] = 10
+	// depth 1, side 0 to move with 2 sixes already rolled: a 6 forfeits (value = eval unchanged, turn passes),
+	// so at depth 1 every roll leaves the position as-is except rolls 1-5 which advance token 0.
+	v2 := g.expectimax(0, 0, 2, 1)
+	// same position with 0 sixes: a 6 is played, so token 0 advances 6 as well (best move).
+	v0 := g.expectimax(0, 0, 0, 1)
+	if !(v0 > v2) {
+		t.Fatalf("a 6 after two sixes must not be playable: v0=%v v2=%v", v0, v2)
+	}
+	// exact: with 2 sixes the sixth outcome contributes eval of the unchanged position.
+	base := g.eval(0)
+	sum := 0.0
+	for r := 1; r <= 5; r++ {
+		h := g.clone()
+		h.move(0, 0, r)
+		sum += h.eval(0)
+	}
+	want := (sum + base) / 6
+	if d := v2 - want; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("v2=%v want %v", v2, want)
 	}
 }
