@@ -55,7 +55,18 @@ func main() {
 		api = os.Getenv("TELEGRAM_API_BASE") // testing only
 	}
 	curl := curlPath
-	r := &Runner{T: CurlTransport{Curl: curl}, API: api, Token: tok, Brain: b,
+	var chat *Chat
+	if os.Getenv("TG_GENERAL_CHAT") == "1" {
+		ct := CurlTransport{Curl: curl}
+		var srch Searcher
+		if kf := os.Getenv("TG_SEARCH_KEY_FILE"); kf != "" {
+			srch = &TavilySearch{P: ct, KeyFile: kf}
+		}
+		chat = NewChat(srch, WikiSearch{T: tools}, ct, NewResolver(ct), func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
+		tools.General = true
+		fmt.Fprintln(os.Stderr, "general chat mode (no language model): search + page extraction; search key present:", srch != nil)
+	}
+	r := &Runner{Chat: chat, T: CurlTransport{Curl: curl}, API: api, Token: tok, Brain: b,
 		StatePath: filepath.Join(dir, "state.json"), DeadPath: filepath.Join(dir, "dead_letter.jsonl"),
 		Sleep: time.Sleep, Log: func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) },
 		Tools: tools, Heartbeat: 10 * time.Minute, RateN: 10, RateS: 60 * time.Second}

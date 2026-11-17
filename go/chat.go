@@ -1,0 +1,731 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"math"
+	"net/url"
+	"os"
+	"os/exec"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+)
+
+// General chat WITHOUT any language model. It is retrieval and rules:
+//   1. small-talk matching (fuzzy token + edit-distance match against hand-written intents),
+//   2. follow-up handling (more / "what about X" / pronouns reuse the last topic),
+//   3. web search -> fetch top pages (SSRF-guarded) -> extract text -> rank sentences (BM25-style) -> quote the best ones.
+// It never generates new text about the world: every factual sentence is a quote from a fetched page, with its source.
+// Page text is untrusted data with no authority (nothing here executes, follows or forwards it).
+
+// ---- search ----
+
+type SearchResult struct {
+	Title, URL, Snippet string
+}
+
+type Searcher interface {
+	Search(q string) ([]SearchResult, error)
+}
+
+// JSONPoster does an https POST with JSON, secrets via curl's stdin config (never argv).
+type JSONPoster interface {
+	PostJSON(rawURL string, headers map[string]string, body []byte, timeoutSec int) ([]byte, int, error)
+}
+
+func (c CurlTransport) PostJSON(rawURL string, headers map[string]string, body []byte, timeoutSec int) ([]byte, int, error) {
+	curl, err := resolveCurl(c.Curl)
+	if err != nil {
+		return nil, 0, err
+	}
+	var cfg bytes.Buffer
+	fmt.Fprintf(&cfg, "url = \"%s\"\n", cfgEscape(rawURL))
+	fmt.Fprintf(&cfg, "user-agent = \"%s\"\n", cfgEscape(userAgent))
+	fmt.Fprintf(&cfg, "header = \"Content-Type: application/json\"\n")
+	for k, v := range headers {
+		fmt.Fprintf(&cfg, "header = \"%s\"\n", cfgEscape(k+": "+v))
+	}
+	fmt.Fprintf(&cfg, "data-binary = \"%s\"\n", cfgEscape(string(body)))
+	args := []string{"-q", "-sS", "--connect-timeout", "10", "--max-time", fmt.Sprint(timeoutSec), "--max-filesize", "1000000",
+		"--proto", "=https", "--noproxy", "*", "-w", "\n%{http_code}", "-K", "-"}
+	cmd := exec.Command(curl, args...)
+	cmd.Stdin = &cfg
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return nil, 0, fmt.Errorf("curl failed")
+	}
+	b := out.Bytes()
+	i := bytes.LastIndexByte(b, '\n')
+	if i < 0 {
+		return nil, 0, fmt.Errorf("bad curl output")
+	}
+	var code int
+	fmt.Sscanf(strings.TrimSpace(string(b[i+1:])), "%d", &code)
+	return b[:i], code, nil
+}
+
+// TavilySearch: official API https://docs.tavily.com/documentation/api-reference/endpoint/search
+// (basic search = 1 credit, free plan = 1,000 credits/month, no card). The key is read from a file per call.
+type TavilySearch struct {
+	P        JSONPoster
+	KeyFile  string
+	Now      func() time.Time
+	DailyCap int
+	day      string
+	used     int
+}
+
+func (t *TavilySearch) Search(q string) ([]SearchResult, error) {
+	now := time.Now
+	if t.Now != nil {
+		now = t.Now
+	}
+	d := now().UTC().Format("2006-01-02")
+	if d != t.day {
+		t.day, t.used = d, 0
+	}
+	limit := t.DailyCap
+	if limit == 0 {
+		limit = 30
+	}
+	if t.used >= limit {
+		return nil, fmt.Errorf("daily search budget used")
+	}
+	raw, err := os.ReadFile(t.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("no search key")
+	}
+	key := strings.TrimSpace(strings.SplitN(string(raw), "\n", 2)[0])
+	if key == "" {
+		return nil, fmt.Errorf("no search key")
+	}
+	body, _ := json.Marshal(map[string]any{"query": trunc(q, 300), "search_depth": "basic", "max_results": 3, "include_answer": false, "include_raw_content": false, "include_images": false})
+	t.used++
+	b, st, err := t.P.PostJSON("https://api.tavily.com/search", map[string]string{"Authorization": "Bearer " + key}, body, 20)
+	if err != nil || st == 0 {
+		return nil, fmt.Errorf("search unreachable")
+	}
+	if st != 200 {
+		return nil, fmt.Errorf("search service returned %d", st)
+	}
+	var d2 struct {
+		Results []struct {
+			Title, URL, Content string
+		} `json:"results"`
+	}
+	if json.Unmarshal(b, &d2) != nil {
+		return nil, fmt.Errorf("bad search response")
+	}
+	var out []SearchResult
+	for _, r := range d2.Results {
+		if _, err := SafeURL(r.URL); err != nil {
+			continue
+		}
+		out = append(out, SearchResult{Title: trunc(r.Title, 120), URL: r.URL, Snippet: r.Content})
+	}
+	return out, nil
+}
+
+// WikiSearch is the keyless fallback: top Wikipedia articles with their intro text.
+type WikiSearch struct{ T *Tools }
+
+func (w WikiSearch) Search(q string) ([]SearchResult, error) {
+	u := w.T.WikiAPI + "?action=query&generator=search&gsrlimit=5&prop=extracts%7Cinfo&exintro=1&explaintext=1&exchars=700&inprop=url&redirects=1&format=json&formatversion=2&gsrsearch=" + url.QueryEscape(subjectQuery(q))
+	b, st, err := w.T.get(u, 15)
+	if err != nil || st != 200 {
+		return nil, fmt.Errorf("wikipedia unreachable")
+	}
+	var d struct {
+		Query struct {
+			Pages []struct {
+				Title   string `json:"title"`
+				Extract string `json:"extract"`
+				URL     string `json:"fullurl"`
+				Index   int    `json:"index"`
+			} `json:"pages"`
+		} `json:"query"`
+	}
+	if json.Unmarshal(b, &d) != nil {
+		return nil, fmt.Errorf("bad response")
+	}
+	var out []SearchResult
+	for i := 1; i <= 5; i++ { // keep search rank order
+		for _, p := range d.Query.Pages {
+			if p.Index == i && strings.TrimSpace(p.Extract) != "" {
+				out = append(out, SearchResult{Title: "Wikipedia - " + p.Title, URL: p.URL, Snippet: strings.Join(strings.Fields(p.Extract), " ")})
+			}
+		}
+	}
+	return out, nil
+}
+
+// ---- chat ----
+
+type convo struct {
+	topic string   // last source title / query, used to resolve follow-ups
+	rest  []string // ranked sentences not yet shown (for "more")
+	srcs  []string
+	seen  int
+}
+
+type Chat struct {
+	Search Searcher // primary web search (may be nil)
+	Wiki   Searcher // keyless fallback (may be nil)
+	Pages  PageFetcher
+	Res    *Resolver
+	Log    func(string)
+	Now    func() time.Time
+	hist   map[string]*convo
+	order  []string
+	Budget time.Duration // total time for search + page fetches
+}
+
+func NewChat(s, w Searcher, pf PageFetcher, res *Resolver, log func(string)) *Chat {
+	return &Chat{Search: s, Wiki: w, Pages: pf, Res: res, Log: log, Now: time.Now, hist: map[string]*convo{}, Budget: 40 * time.Second}
+}
+
+func (c *Chat) logf(s string) {
+	if c.Log != nil {
+		c.Log(s)
+	}
+}
+
+func (c *Chat) state(chat string) *convo {
+	if s, ok := c.hist[chat]; ok {
+		return s
+	}
+	s := &convo{}
+	c.hist[chat] = s
+	c.order = append(c.order, chat)
+	for len(c.order) > 500 {
+		delete(c.hist, c.order[0])
+		c.order = c.order[1:]
+	}
+	return s
+}
+
+// ---- text helpers ----
+
+var tokRe = regexp.MustCompile(`[\p{L}\p{N}]+`)
+
+var stopW = func() map[string]bool {
+	m := map[string]bool{}
+	for _, w := range strings.Fields(`a an the and or but if of to in on at by for with from as is are was were be been being do does did
+	i me my you your he she it its we they them his her their this that these those what who whom which when where why how
+	about tell can could would should will shall may might please hey hi hello so than then there here into over under
+	just also very really some any more most much many s t`) {
+		m[w] = true
+	}
+	return m
+}()
+
+func stemW(w string) string {
+	for _, suf := range []string{"ing", "ed", "es", "s"} {
+		if len(w) > len(suf)+2 && strings.HasSuffix(w, suf) {
+			return w[:len(w)-len(suf)]
+		}
+	}
+	return w
+}
+
+func toks(s string) []string {
+	var out []string
+	for _, w := range tokRe.FindAllString(strings.ToLower(s), -1) {
+		out = append(out, w)
+	}
+	return out
+}
+
+func terms(s string) []string {
+	var out []string
+	for _, w := range toks(s) {
+		if !stopW[w] {
+			out = append(out, stemW(w))
+		}
+	}
+	return out
+}
+
+func lev(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	prev := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		cur := make([]int, len(rb)+1)
+		cur[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			cur[j] = minInt(minInt(prev[j]+1, cur[j-1]+1), prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(rb)]
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// similarity of two short phrases: best of token-set overlap and character edit similarity.
+func similarity(a, b string) float64 {
+	ta, tb := toks(a), toks(b)
+	sa, sb := map[string]bool{}, map[string]bool{}
+	for _, w := range ta {
+		sa[w] = true
+	}
+	for _, w := range tb {
+		sb[w] = true
+	}
+	inter := 0
+	for w := range sa {
+		if sb[w] {
+			inter++
+		}
+	}
+	jac := 0.0
+	if len(sa)+len(sb)-inter > 0 {
+		jac = float64(inter) / float64(len(sa)+len(sb)-inter)
+	}
+	ja, jb := strings.Join(ta, " "), strings.Join(tb, " ")
+	m := len([]rune(ja))
+	if n := len([]rune(jb)); n > m {
+		m = n
+	}
+	ed := 0.0
+	if m > 0 {
+		ed = 1 - float64(lev(ja, jb))/float64(m)
+	}
+	return math.Max(jac, ed)
+}
+
+// ---- small talk ----
+
+type intent struct {
+	name  string
+	pats  []string
+	reply []string
+}
+
+var intents = []intent{
+	{"greet", []string{"hi", "hello", "hey", "hey there", "hello there", "yo", "good morning", "good afternoon", "good evening", "howdy", "hiya", "sup", "whats up", "what is up"},
+		[]string{"Hey! What do you want to look up or talk about?", "Hello! Ask me a question, a calculation, the weather, or a word.", "Hi there. What's on your mind?"}},
+	{"howare", []string{"how are you", "how are you doing", "how are you today", "hows it going", "how is it going", "how do you do", "are you ok", "are you okay", "you good"},
+		[]string{"Doing fine, thanks. I'm a program, so no feelings to report, but I'm running well. What can I find for you?", "All good on my side. Want me to look something up?"}},
+	{"thanks", []string{"thanks", "thank you", "thx", "ty", "thanks a lot", "thank you so much", "cheers", "appreciate it"},
+		[]string{"You're welcome.", "Anytime.", "Glad to help."}},
+	{"bye", []string{"bye", "goodbye", "see you", "see ya", "good night", "goodnight", "later", "cya", "talk later"},
+		[]string{"Bye! Message me whenever.", "See you. I'll be here."}},
+	{"who", []string{"who are you", "what are you", "what is your name", "whats your name", "your name", "who made you", "are you a bot", "are you a robot", "are you human", "are you real", "are you ai", "are you chatgpt", "are you an ai"},
+		[]string{"I'm a Telegram bot running on a phone. I'm not a language model and I don't write original answers: I match your message to things I can do, search the web, read pages, and quote the best passages with their sources."}},
+	{"can", []string{"what can you do", "what do you do", "help me", "how do you work", "what are your features", "what can i ask you", "what can i ask", "how can you help"},
+		[]string{"I can: search the web and quote the most relevant passage from the pages with links; do maths (e.g. 12*(3+4)); convert units and currencies; give the weather for a place; define words; and chat in a basic way. Say \"more\" after an answer for more from the same pages. I can't write essays, poems or code, and I can be wrong, so check the sources."}},
+	{"ok", []string{"ok", "okay", "cool", "nice", "great", "awesome", "alright", "got it", "lol", "haha", "wow", "good"},
+		[]string{"👍 Anything else?", "Okay. Ask away whenever."}},
+	{"sorry", []string{"sorry", "my bad", "apologies", "oops"}, []string{"No problem."}},
+	{"insult", []string{"you are stupid", "youre stupid", "you suck", "you are useless", "youre useless", "this is bad", "you are dumb", "dumb bot", "stupid bot", "useless bot"},
+		[]string{"Fair enough, I do get things wrong. Tell me what went wrong and I'll try a different search or wording."}},
+	{"praise", []string{"you are smart", "youre smart", "good bot", "nice bot", "great job", "well done", "you are great", "youre great", "you are awesome"},
+		[]string{"Thanks! I just search and quote, but I'm glad it helped."}},
+	{"joke", []string{"tell me a joke", "joke", "say something funny", "make me laugh"},
+		[]string{"I can't invent jokes, but I know one: why did the programmer quit? Because they didn't get arrays.", "A short one: I would tell you a UDP joke, but you might not get it."}},
+	{"time", []string{"what time is it", "what is the time", "current time", "what day is it", "what is the date", "todays date"},
+		[]string{"I don't have a clock I trust here. Ask me \"time in Lagos\" style questions and I'll search, or check your phone."}},
+}
+
+func hash(s string) int {
+	h := 0
+	for _, r := range s {
+		h = (h*31 + int(r)) & 0x7fffffff
+	}
+	return h
+}
+
+// smallTalk returns a canned reply when the (short) message closely matches a known phrase.
+func smallTalk(text string) (string, string, bool) {
+	t := strings.Join(toks(strings.ReplaceAll(text, "'", "")), " ")
+	if t == "" || len(strings.Fields(t)) > 7 {
+		return "", "", false
+	}
+	best, bi := 0.0, -1
+	for i, in := range intents {
+		for _, p := range in.pats {
+			if s := similarity(t, p); s > best {
+				best, bi = s, i
+			}
+		}
+	}
+	// short single-word phrases need an exact-ish match to avoid false positives
+	thr := 0.8
+	if bi >= 0 && best >= thr {
+		in := intents[bi]
+		return in.name, in.reply[hash(t)%len(in.reply)], true
+	}
+	return "", "", false
+}
+
+var (
+	reMore     = regexp.MustCompile(`^(more|tell me more|go on|continue|and\??|keep going|elaborate|more info|more details|what else)[ !.?]*$`)
+	reFollow   = regexp.MustCompile(`^(and|what about|how about|what of|so)\b|\b(it|its|his|her|their|there|that one)\b`)
+	reGenerate = regexp.MustCompile(`(?i)^(please )?(write|compose|draft|generate|create|make|code|program|translate|summari[sz]e|rewrite|essay|poem|story)\b`)
+	urlInText  = regexp.MustCompile(`(?i)https?://[^\s)>\]]+|www\.[^\s)>\]]+`)
+)
+
+// ---- ranking ----
+
+var sentSplit = regexp.MustCompile(`(?:[.!?])\s+(?:[A-Z0-9"“(])`)
+
+func sentences(text string) []string {
+	var out []string
+	for _, para := range strings.Split(text, "\n") {
+		para = strings.TrimSpace(para)
+		if para == "" {
+			continue
+		}
+		start := 0
+		for _, loc := range sentSplit.FindAllStringIndex(para, -1) {
+			end := loc[0] + 1
+			out = append(out, strings.TrimSpace(para[start:end]))
+			start = loc[1] - 1
+		}
+		out = append(out, strings.TrimSpace(para[start:]))
+	}
+	var keep []string
+	for _, s := range out {
+		if n := len([]rune(s)); n >= 30 && n <= 450 && !reJunk.MatchString(s) {
+			keep = append(keep, s)
+		}
+	}
+	return keep
+}
+
+type cand struct {
+	text  string
+	src   int
+	pos   int
+	score float64
+	cover float64
+}
+
+// rank scores sentences against the query terms with BM25 (idf from the candidate pool), plus coverage and a small
+// bonus for early sentences. cover = share of query terms present.
+func rank(query string, cands []cand) []cand {
+	qt := terms(query)
+	if len(qt) == 0 || len(cands) == 0 {
+		return nil
+	}
+	lq := strings.ToLower(strings.TrimSpace(query))
+	isDef, isQty := reDef.MatchString(lq), reQty.MatchString(lq)
+	uniq := map[string]bool{}
+	var q []string
+	for _, t := range qt {
+		if !uniq[t] {
+			uniq[t] = true
+			q = append(q, t)
+		}
+	}
+	nOrig := len(q)
+	for _, t := range append([]string(nil), q...) {
+		for _, x := range synonyms[t] {
+			if !uniq[x] {
+				uniq[x] = true
+				q = append(q, x)
+			}
+		}
+	}
+	df := map[string]int{}
+	tf := make([]map[string]int, len(cands))
+	total := 0
+	for i, c := range cands {
+		tf[i] = map[string]int{}
+		ts := terms(c.text)
+		total += len(ts)
+		for _, t := range ts {
+			tf[i][t]++
+		}
+		for t := range tf[i] {
+			df[t]++
+		}
+	}
+	avg := float64(total) / float64(len(cands))
+	if avg < 1 {
+		avg = 1
+	}
+	N := float64(len(cands))
+	for i := range cands {
+		dl := 0
+		for _, n := range tf[i] {
+			dl += n
+		}
+		var sc float64
+		hit := 0
+		for qi, t := range q {
+			f := float64(tf[i][t])
+			if f == 0 {
+				continue
+			}
+			if qi < nOrig {
+				hit++
+			}
+			idf := math.Log(1 + (N-float64(df[t])+0.5)/(float64(df[t])+0.5))
+			sc += idf * (f * 2.2) / (f + 1.2*(0.25+0.75*float64(dl)/avg))
+		}
+		cands[i].cover = float64(hit) / float64(nOrig)
+		cands[i].score = sc*(0.5+cands[i].cover) + 0.3/float64(1+cands[i].pos)
+		cands[i].score += 1.2 / float64(1+cands[i].src) // earlier (better-matching) sources first
+		if isDef && cands[i].pos < 3 {
+			cands[i].score += 1.5 / float64(1+cands[i].pos)
+		}
+		if isQty && reDigit.MatchString(cands[i].text) {
+			cands[i].score += 0.8
+		}
+	}
+	sort.SliceStable(cands, func(a, b int) bool { return cands[a].score > cands[b].score })
+	return cands
+}
+
+func cleanTitle(t string) string {
+	t = strings.TrimPrefix(t, "Wikipedia - ")
+	for _, suf := range []string{" - Wikipedia", " | Britannica", " - Britannica"} {
+		t = strings.TrimSuffix(t, suf)
+	}
+	return strings.TrimSpace(t)
+}
+
+func hostOf(u string) string {
+	p, err := url.Parse(u)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimPrefix(strings.ToLower(p.Hostname()), "www.")
+}
+
+var (
+	reCite  = regexp.MustCompile(`\[\s*(\d+|[a-z]|citation needed|note \d+)\s*\]`)
+	reSpPun = regexp.MustCompile(`\s+([,.;:!?)])`)
+	reOpen  = regexp.MustCompile(`\(\s+`)
+	reJunk  = regexp.MustCompile(`(?i)map credit|show map|location within|click here|cookie|subscribe|sign up|all rights reserved|privacy policy`)
+	reDigit = regexp.MustCompile(`\d`)
+	reDef   = regexp.MustCompile(`^(who|what)\s+(is|are|was|were)\b|^(define|explain)\b`)
+	reQty   = regexp.MustCompile(`\b(how (many|tall|long|far|old|much|big|high|deep)|population|when|year|price|cost|height|age)\b`)
+)
+
+func noLinks(s string) string {
+	s = urlInText.ReplaceAllString(s, "")
+	s = reCite.ReplaceAllString(s, "")
+	s = reSpPun.ReplaceAllString(s, "$1")
+	s = reOpen.ReplaceAllString(s, "(")
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// rerankResults puts results whose title matches the question's subject first (Wikipedia search often returns
+// related pages like "Ada Lovelace Day" before "Ada Lovelace").
+func rerankResults(q string, rs []SearchResult) []SearchResult {
+	qt := map[string]bool{}
+	for _, t := range terms(q) {
+		qt[t] = true
+	}
+	score := func(r SearchResult) float64 {
+		tt := terms(cleanTitle(r.Title))
+		if len(tt) == 0 {
+			return 0
+		}
+		in := 0
+		for _, t := range tt {
+			if qt[t] {
+				in++
+			}
+		}
+		// all title words in the question, and few extra title words, is best
+		return float64(in)/float64(len(tt)) + 0.2*float64(in)
+	}
+	out := append([]SearchResult(nil), rs...)
+	sort.SliceStable(out, func(a, b int) bool { return score(out[a]) > score(out[b]) })
+	return out
+}
+
+const srcNote = "Quoted from the web (untrusted, may be wrong):"
+
+// Reply answers one message. It never returns an empty string.
+func (c *Chat) Reply(chat, text string) string {
+	text = strings.TrimSpace(text)
+	st := c.state(chat)
+	low := strings.ToLower(text)
+	if _, r, ok := smallTalk(low); ok {
+		return r
+	}
+	if reMore.MatchString(low) {
+		if len(st.rest) == 0 {
+			return "I don't have anything more saved from the last answer. Ask a new question or add detail."
+		}
+		n := 2
+		if n > len(st.rest) {
+			n = len(st.rest)
+		}
+		out := strings.Join(st.rest[:n], " ")
+		st.rest = st.rest[n:]
+		return out + "\n\n" + srcNote + " " + strings.Join(st.srcs, "  ")
+	}
+	if reGenerate.MatchString(low) {
+		return "I can't write or generate new content (essays, poems, code, translations): I only search, quote, calculate and look things up. If you tell me what you want to know about the topic, I'll search for it."
+	}
+	query := text
+	if st.topic != "" && len(terms(text)) <= 4 && reFollow.MatchString(low) {
+		query = text + " " + st.topic
+	}
+	if len(terms(query)) == 0 {
+		return "I didn't catch a topic there. Ask me a question or say /help."
+	}
+	deadline := c.Now().Add(c.Budget)
+	var results []SearchResult
+	if c.Search != nil {
+		var err error
+		if results, err = c.Search.Search(query); err != nil {
+			c.logf("web search failed (primary)")
+		}
+	}
+	if len(results) == 0 && c.Wiki != nil {
+		var err error
+		if results, err = c.Wiki.Search(query); err != nil {
+			c.logf("web search failed (wikipedia)")
+		}
+	}
+	if len(results) == 0 {
+		return "I couldn't find web results for that (or the connection is slow). I don't guess facts, so try rewording or ask again in a minute."
+	}
+	var cands []cand
+	var srcs []SearchResult
+	for _, r := range rerankResults(query, results) {
+		if len(srcs) >= 3 {
+			break
+		}
+		body := ""
+		if c.Pages != nil && c.Res != nil && c.Now().Before(deadline) {
+			if _, b, err := FetchPage(c.Pages, c.Res, r.URL); err == nil {
+				body = ExtractText(b, 8000).Text
+			} else {
+				c.logf("page fetch failed")
+			}
+		}
+		if body == "" {
+			body = Sanitize(trunc(r.Snippet, 700))
+		}
+		ss := sentences(body)
+		if len(ss) == 0 {
+			continue
+		}
+		idx := len(srcs)
+		srcs = append(srcs, r)
+		for p, s := range ss {
+			cands = append(cands, cand{text: noLinks(s), src: idx, pos: p})
+		}
+		if idx == 0 {
+			if t := cleanTitle(r.Title); t != "" {
+				st.topic = t
+			}
+		}
+	}
+	ranked := rank(query, cands)
+	if len(ranked) == 0 || ranked[0].cover < 0.34 {
+		st.rest = nil
+		msg := "I found pages but nothing in them that clearly answers that, so I won't guess."
+		if len(srcs) > 0 {
+			msg += " You can read: " + srcs[0].URL
+		}
+		return msg
+	}
+	var picked []cand
+	used := map[string]bool{}
+	// "who/what is X": the encyclopedia intro's first sentence is the best definition; lead with it when the top source has one.
+	if reDef.MatchString(strings.ToLower(query)) && len(results) > 0 {
+		top := rerankResults(query, results)[0]
+		if ss := sentences(Sanitize(trunc(top.Snippet, 700))); len(ss) > 0 {
+			for i, x := range srcs {
+				if x.URL == top.URL {
+					first := noLinks(ss[0])
+					used[first] = true
+					picked = append(picked, cand{text: first, src: i, pos: -1, cover: 1})
+				}
+			}
+		}
+	}
+	for _, cd := range ranked {
+		if len(picked) >= 3 {
+			break
+		}
+		if used[cd.text] || cd.cover < 0.34 {
+			continue
+		}
+		used[cd.text] = true
+		picked = append(picked, cd)
+	}
+	var rest []string
+	for _, cd := range ranked {
+		if !used[cd.text] && cd.cover >= 0.34 && len(rest) < 6 {
+			rest = append(rest, cd.text)
+		}
+	}
+	// show the chosen sentences in the order they appear on the page
+	sort.SliceStable(picked, func(a, b int) bool {
+		if picked[a].src != picked[b].src {
+			return picked[a].src < picked[b].src
+		}
+		return picked[a].pos < picked[b].pos
+	})
+	var parts []string
+	seen := map[int]bool{}
+	for _, p := range picked {
+		seen[p.src] = true
+		parts = append(parts, p.text)
+	}
+	var ls []string
+	st.srcs = nil
+	for i, s := range srcs {
+		if seen[i] {
+			ls = append(ls, fmt.Sprintf("[%d] %s", len(ls)+1, s.URL))
+		}
+	}
+	st.srcs = ls
+	st.rest = rest
+	out := trunc(strings.Join(parts, " "), 900) + "\n\n" + srcNote + " " + strings.Join(ls, "  ")
+	if len(rest) > 0 {
+		out += "\nSay \"more\" for more."
+	}
+	c.logf("chat reply ok")
+	return out
+}
+
+var qWords = map[string]bool{"tall": true, "long": true, "far": true, "old": true, "many": true, "much": true, "big": true, "high": true, "deep": true, "population": true, "height": true, "define": true, "explain": true, "meaning": true, "latest": true, "news": true, "capital": false}
+
+// subjectQuery drops question words so an encyclopedia search sees the subject ("who was Ada Lovelace" -> "Ada Lovelace").
+func subjectQuery(q string) string {
+	var out []string
+	for _, w := range toks(q) {
+		if !stopW[w] && !qWords[w] {
+			out = append(out, w)
+		}
+	}
+	if len(out) == 0 {
+		return q
+	}
+	return strings.Join(out, " ")
+}
+
+var synonyms = map[string][]string{
+	"tall": {"height", "metre", "meter", "feet", "high"}, "high": {"height", "metre", "feet", "elevation"},
+	"population": {"inhabitant", "census", "resident", "people"}, "old": {"age", "born", "year"},
+	"far": {"distance", "kilometre", "mile", "km"}, "long": {"length", "kilometre", "mile", "year"},
+	"big": {"size", "area", "square"}, "cost": {"price", "dollar", "usd"}, "price": {"cost", "dollar", "usd"},
+	"die": {"death", "died"}, "born": {"birth"}, "found": {"founded", "established"}, "invent": {"inventor", "invented"},
+}

@@ -74,3 +74,16 @@ Limits, stated plainly: answers are only as good as the one top search hit; it c
 Self-test (no token, no Telegram contact): `./tgbot-arm64 --version`, `./tgbot-arm64 --selftest` (offline), `TG_CURL=/system/bin/curl ./tgbot-arm64 --selftest-net` (also curl + TLS to Wikipedia and Frankfurter). Prints PASS/FAIL lines, exit code 1 on failure.
 
 Previous build, kept for rollback: git tag `v1.1-polling-fix` (commit 1d4ab659ba738ddfa7c95620284cd0983a36d12c).
+
+## v3: general chat with web search (candidate, no language model)
+No pretrained model, local or hosted, is used. Chat is rules plus retrieval, enabled by env TG_GENERAL_CHAT=1 (otherwise v2 behaviour).
+- Order: /commands, explicit tools (calc, units, FX, weather, define, wiki), then chat.
+- Small talk: fuzzy match (token overlap + edit distance) against hand-written intents (greetings, thanks, who are you, what can you do...).
+- Follow-ups: "more" shows further quoted sentences; short follow-ups ("what about its population?") reuse the last topic.
+- Web: search (Tavily if TG_SEARCH_KEY_FILE is set, else Wikipedia search, keyless), fetch up to 3 pages, extract text, rank sentences
+  (BM25-style with synonyms, coverage, definition and number bonuses), and QUOTE the best 1-3 sentences with source links.
+  If nothing covers the question it says so instead of guessing. It cannot write essays, poems or code, and does no reasoning.
+- Page fetching is guarded before any request: https only, no IP literals/odd ports, DNS via DoH, every address must be public,
+  the IP is pinned, redirects (max 3) re-validated, html/text only. Page text is untrusted: nothing executes or follows it, links are stripped.
+- Privacy: your words go to the search service, DoH resolvers and the sites read.
+- Limits: extractive answers can be off-topic or truncated; quality is lower than a language model's.

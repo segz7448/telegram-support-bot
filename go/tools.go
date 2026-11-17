@@ -70,6 +70,7 @@ type Tools struct {
 	FxAPI   string
 	cache   map[string]cacheEntry
 	calls   []time.Time
+	General bool // general-chat mode: /help describes search chat
 }
 
 func NewTools(f Fetcher, log func(string)) *Tools {
@@ -81,6 +82,10 @@ func NewTools(f Fetcher, log func(string)) *Tools {
 		FxAPI:   "https://api.frankfurter.dev/v1/latest",
 		cache:   map[string]cacheEntry{}}
 }
+
+const helpGeneral = "I'm a chat bot running on a phone. I'm not a language model: I match what you say to things I can do, search the web, read a few pages, and quote the most relevant sentences with their links. So I can be wrong or miss the point; check the links. Say \"more\" after an answer for more from the same pages.\n" +
+	"Quick tools: maths (12*(3+4)), units (5 km in miles), money (100 usd to eur), weather in Lagos, define serendipity, wiki Alan Turing.\n" +
+	"I can't write essays, poems or code. When I look something up, your words go to a web search service and the sites I read. I only remember the last topic of the chat, in memory."
 
 const helpText = "I answer questions from prepared replies, and I can do a few lookups:\n" +
 	"- maths: 12*(3+4), 15% of 80\n" +
@@ -103,11 +108,15 @@ func (t *Tools) Command(text string) (string, bool) {
 	if len(f) == 0 {
 		return "", false
 	}
+	h := helpText
+	if t.General {
+		h = helpGeneral
+	}
 	switch strings.SplitN(f[0], "@", 2)[0] {
 	case "/start":
-		return "Hello! Ask me a question.\n\n" + helpText, true
+		return "Hello! Ask me anything.\n\n" + h, true
 	case "/help":
-		return helpText, true
+		return h, true
 	}
 	return "", false
 }

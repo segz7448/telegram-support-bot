@@ -163,12 +163,25 @@ type Runner struct {
 	RateN      int
 	RateS      time.Duration
 	Tools      *Tools        // optional lookups layered over the Brain
+	Chat       *Chat         // optional general chat (rules + web search + extraction, no language model); replaces the Brain-first order
 	PollSec    int           // getUpdates long-poll seconds (0 = 20). Short polls survive mobile links that drop idle connections.
 	Heartbeat  time.Duration // periodic non-secret status line (0 = off)
 }
 
 // reply: explicit tool requests first, then the Brain; open questions the Brain could not answer go to lookups.
 func (r *Runner) reply(text, chat string) string {
+	if r.Chat != nil && r.Tools != nil {
+		if rep, ok := r.Tools.Command(text); ok {
+			return rep
+		}
+		if strings.HasPrefix(strings.TrimSpace(text), "/") {
+			return "I only understand plain text messages. Send /help."
+		}
+		if rep, ok := r.Tools.Pre(text); ok {
+			return rep
+		}
+		return r.Chat.Reply(chat, text)
+	}
 	if r.Tools == nil {
 		return r.Brain.Reply(text, chat)
 	}
@@ -311,6 +324,9 @@ func (r *Runner) Run() error {
 				} else {
 					rate[cid] = append(q, now)
 					sent := false
+					if r.Chat != nil { // best-effort "typing..." while search and page reads run
+						call(r.T, r.API, r.Token, "sendChatAction", url.Values{"chat_id": {fmt.Sprint(cid)}, "action": {"typing"}}, 5)
+					}
 					reply := r.reply(text, fmt.Sprint(cid))
 					for a := 0; a < 3 && !sent; a++ {
 						_, err := call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(cid)}, "text": {reply}}, 30)
