@@ -87,6 +87,7 @@ func main() {
 			chat.Know = &Knowledge{} // disabled: teaching commands explain why, /whoami still works
 		}
 		chat.GH = ct
+		chat.News = &News{G: ct, Path: os.Getenv("TG_NEWS_FILE"), Owner: strings.TrimSpace(os.Getenv("TG_OWNER_ID")), Google: os.Getenv("TG_NEWS_GOOGLE") == "1"}
 		tools.General = true
 		fmt.Fprintln(os.Stderr, "general chat mode (no language model): search + page extraction; search key present:", srch != nil)
 	}

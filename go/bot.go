@@ -369,6 +369,12 @@ func (r *Runner) Run() error {
 			}
 			r.Log(fmt.Sprintf("alive: polls ok=%d failed=%d (consecutive failures %d), last ok poll %s, replies sent=%d, send failures=%d", okPolls, failPolls, consecFail, ago, replies, sendFails))
 		}
+		if r.Chat != nil && r.Chat.News != nil {
+			for _, m := range r.Chat.News.Tick(time.Now()) {
+				call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {m.Chat}, "text": {m.Text}, "disable_web_page_preview": {"true"}}, 30)
+				r.Log("scheduled news sent")
+			}
+		}
 		res, err := call(r.T, r.API, r.Token, "getUpdates", url.Values{"offset": {fmt.Sprint(offset)}, "timeout": {fmt.Sprint(pollSec)}, "allowed_updates": {`["message"]`}}, pollSec+15)
 		if err != nil {
 			errs++
