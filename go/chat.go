@@ -254,6 +254,9 @@ type Chat struct {
 	Know   *Knowledge    // owner-taught facts (nil = off)
 	GH     GitHubGetter  // keyless public GitHub repository search (nil = off)
 	News   *News         // keyless news headlines and owner daily digest (nil = off)
+	Rem    *Reminders    // in-bot reminders (nil = off)
+	Notes  *Notes        // per-chat notes and tasks with tags (nil = off)
+	Admin  *Admin        // owner status/export and per-chat rate limit (nil = off)
 }
 
 func NewChat(s, w Searcher, pf PageFetcher, res *Resolver, log func(string)) *Chat {
@@ -691,6 +694,24 @@ const srcNote = "Quoted from the web (untrusted, may be wrong):"
 // Reply answers one message. It never returns an empty string.
 func (c *Chat) Reply(chat, text string) string {
 	text = strings.TrimSpace(text)
+	if c.Admin != nil {
+		if r, ok := c.Admin.Handle(chat, text); ok {
+			return r
+		}
+	}
+	if r, ok := TextTool(text); ok {
+		return r
+	}
+	if c.Rem != nil {
+		if r, ok := c.Rem.Handle(chat, text); ok {
+			return r
+		}
+	}
+	if c.Notes != nil {
+		if r, ok := c.Notes.Handle(chat, text); ok {
+			return r
+		}
+	}
 	if c.Know != nil {
 		if r, ok := c.Know.Handle(chat, text); ok {
 			return r

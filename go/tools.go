@@ -68,6 +68,10 @@ type Tools struct {
 	GeoAPI  string
 	WxAPI   string
 	FxAPI   string
+	ErAPI   string // ExchangeRate-API open endpoint (fallback for currencies the ECB list lacks)
+	erRates map[string]float64
+	erDate  string
+	erAt    time.Time
 	cache   map[string]cacheEntry
 	calls   []time.Time
 	General bool // general-chat mode: /help describes search chat
@@ -80,6 +84,7 @@ func NewTools(f Fetcher, log func(string)) *Tools {
 		GeoAPI:  "https://geocoding-api.open-meteo.com/v1/search",
 		WxAPI:   "https://wttr.in/",
 		FxAPI:   "https://api.frankfurter.dev/v1/latest",
+		ErAPI:   "https://open.er-api.com/v6/latest/USD",
 		cache:   map[string]cacheEntry{}}
 }
 
@@ -88,6 +93,7 @@ const helpGeneral = "I'm a chat bot running on a phone. I'm not a language model
 	"Dates and time: days until 2026-12-25, what day is 2027-03-01, 30 days from today, time in Tokyo, convert 3 pm New York to Lagos. Dates use UTC unless the owner set a time zone; I say which one I used.\n" +
 	"Calculator script (numbers only, no files or network): calc script: let s = 0; for i = 1 to 10 { s = s + i }; print s\n" +
 	"Designs: quote card: text - Author | poster: Title | Subtitle | Footer | bar chart: Mon=5, Tue=8 title: Sales | line chart / pie chart / banner. Add theme: dark, blue, green, sunset, light or mono. Built-in templates, not Canva.\n" +
+	"Reminders: remind me at 6pm to call mum / in 20 minutes to ... / every day at 8am to ...; reminders; cancel reminder 2. Notes: note: buy milk #shopping; task: call bank; notes; tasks; tags; done 2. Text: word count: ..., uppercase: ..., base64 encode: ..., sha256: ..., pretty json: ....\n" +
 	"News: say \"news\", \"news business\" or \"news about forex\" for headlines from BBC News feeds (shown unchanged, not checked by me). The owner can say \"daily news at 8:00\" (bot time zone), \"daily news status\" or \"daily news off\".\n" +
 	"GitHub: say e.g. find github repos about weather apps. Public repositories only, GitHub's own relevance order, not a quality or safety check.\n" +
 	"Pictures: send a picture with a caption such as: sharpen, black and white, sepia, brighter, darker, more contrast, rotate right, mirror, resize 50%. Local edits, no AI; sharpening can't restore lost detail.\n" +
@@ -455,6 +461,9 @@ var units = map[string]unit{
 	"l": {"vol", 1}, "liter": {"vol", 1}, "liters": {"vol", 1}, "litre": {"vol", 1}, "litres": {"vol", 1},
 	"ml": {"vol", 0.001}, "gal": {"vol", 3.785411784}, "gallon": {"vol", 3.785411784}, "gallons": {"vol", 3.785411784},
 	"kmh": {"spd", 1}, "km/h": {"spd", 1}, "kph": {"spd", 1}, "mph": {"spd", 1.609344},
+	"b": {"data", 1}, "byte": {"data", 1}, "bytes": {"data", 1}, "kb": {"data", 1e3}, "mb": {"data", 1e6}, "gb": {"data", 1e9}, "tb": {"data", 1e12}, "pb": {"data", 1e15},
+	"kib": {"data", 1 << 10}, "mib": {"data", 1 << 20}, "gib": {"data", 1 << 30}, "tib": {"data", 1 << 40},
+	"kilobyte": {"data", 1e3}, "kilobytes": {"data", 1e3}, "megabyte": {"data", 1e6}, "megabytes": {"data", 1e6}, "gigabyte": {"data", 1e9}, "gigabytes": {"data", 1e9}, "terabyte": {"data", 1e12}, "terabytes": {"data", 1e12},
 	"c": {"temp", 0}, "celsius": {"temp", 0}, "°c": {"temp", 0}, "f": {"temp", 1}, "fahrenheit": {"temp", 1}, "°f": {"temp", 1}, "k": {"temp", 2}, "kelvin": {"temp", 2},
 }
 
@@ -494,10 +503,17 @@ func (t *Tools) convert(low string) (string, bool) {
 			return fmt.Sprintf("%s %s = %s %s", fmtNum(v), from, fmtNum(math.Round(r*100)/100), to), true
 		}
 		r := v * fu.f / tu.f
-		return fmt.Sprintf("%s %s = %s %s", fmtNum(v), from, fmtNum(math.Round(r*10000)/10000), to), true
+		note := ""
+		if fu.kind == "data" {
+			note = "\n(Decimal units: 1 GB = 1000 MB. KiB, MiB and GiB use 1024.)"
+		}
+		return fmt.Sprintf("%s %s = %s %s%s", fmtNum(v), from, fmtNum(math.Round(r*10000)/10000), to, note), true
 	}
 	if ecb[from] && ecb[to] && !ok1 && !ok2 {
 		return t.currency(v, strings.ToUpper(from), strings.ToUpper(to)), true
+	}
+	if isoCodes[from] && isoCodes[to] && !ok1 && !ok2 && from != to {
+		return t.currencyER(v, strings.ToUpper(from), strings.ToUpper(to)), true
 	}
 	return "", false
 }

@@ -233,8 +233,12 @@ func TestRateGuard(t *testing.T) {
 	}
 	r.MaxUpdates = 15
 	r.Run()
-	if len(f.sent) != 10 || !strings.Contains(strings.Join(*logs, ""), "rate limit") {
+	// 10 answers, then exactly ONE notice (not one per dropped message)
+	if len(f.sent) != 11 || !strings.Contains(strings.Join(*logs, ""), "rate limit") {
 		t.Fatalf("sent %d", len(f.sent))
+	}
+	if !strings.Contains(f.sent[10].Get("text"), "faster than I answer") {
+		t.Fatalf("notice missing: %v", f.sent[10])
 	}
 }
 

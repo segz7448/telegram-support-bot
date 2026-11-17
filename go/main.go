@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -88,13 +89,23 @@ func main() {
 		}
 		chat.GH = ct
 		chat.News = &News{G: ct, Path: os.Getenv("TG_NEWS_FILE"), Owner: strings.TrimSpace(os.Getenv("TG_OWNER_ID"))}
+		chat.Rem = &Reminders{Path: os.Getenv("TG_REMINDERS_FILE")}
+		chat.Notes = &Notes{Path: os.Getenv("TG_NOTES_FILE")}
+		chat.Admin = &Admin{Owner: strings.TrimSpace(os.Getenv("TG_OWNER_ID")), Version: "tgbot " + Version, Start: time.Now(), Know: chat.Know, Notes: chat.Notes, Rem: chat.Rem, News: chat.News}
 		tools.General = true
 		fmt.Fprintln(os.Stderr, "general chat mode (no language model): search + page extraction; search key present:", srch != nil)
+	}
+	rateN := 10
+	if v, err := strconv.Atoi(os.Getenv("TG_RATE_PER_MIN")); err == nil && v >= 3 && v <= 60 {
+		rateN = v
+	}
+	if chat != nil && chat.Admin != nil {
+		chat.Admin.RatePerMin = rateN
 	}
 	r := &Runner{Chat: chat, T: CurlTransport{Curl: curl}, API: api, Token: tok, Brain: b,
 		StatePath: filepath.Join(dir, "state.json"), DeadPath: filepath.Join(dir, "dead_letter.jsonl"),
 		Sleep: time.Sleep, Log: func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) },
-		Tools: tools, Heartbeat: 10 * time.Minute, RateN: 10, RateS: 60 * time.Second}
+		Tools: tools, Heartbeat: 10 * time.Minute, RateN: rateN, RateS: 60 * time.Second}
 	fmt.Println("bot running", Version)
 	if err := r.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", redact(err.Error(), tok))

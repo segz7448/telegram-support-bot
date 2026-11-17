@@ -256,6 +256,11 @@ type Runner struct {
 // reply: explicit tool requests first, then the Brain; open questions the Brain could not answer go to lookups.
 func (r *Runner) reply(text, chat string) string {
 	if r.Chat != nil && r.Tools != nil {
+		if r.Chat.Admin != nil {
+			if rep, ok := r.Chat.Admin.Handle(chat, strings.TrimSpace(text)); ok {
+				return rep
+			}
+		}
 		if r.Chat.Know != nil {
 			if rep, ok := r.Chat.Know.Handle(chat, strings.TrimSpace(text)); ok {
 				return rep
@@ -353,6 +358,7 @@ func (r *Runner) Run() error {
 	r.Log(fmt.Sprintf("polling started (long-poll %ds, offset %d)", pollSec, offset))
 	rate := map[int64][]time.Time{}
 	lastPhoto := map[int64]time.Time{}
+	rateWarn := map[int64]time.Time{}
 	for {
 		if len(rate) > 1000 { // evict idle chats
 			for k, ts := range rate {
@@ -373,6 +379,12 @@ func (r *Runner) Run() error {
 			for _, m := range r.Chat.News.Tick(time.Now()) {
 				call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {m.Chat}, "text": {m.Text}, "disable_web_page_preview": {"true"}}, 30)
 				r.Log("scheduled news sent")
+			}
+		}
+		if r.Chat != nil && r.Chat.Rem != nil {
+			for _, m := range r.Chat.Rem.Tick(time.Now()) {
+				call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {m.Chat}, "text": {m.Text}}, 30)
+				r.Log("reminder sent")
 			}
 		}
 		res, err := call(r.T, r.API, r.Token, "getUpdates", url.Values{"offset": {fmt.Sprint(offset)}, "timeout": {fmt.Sprint(pollSec)}, "allowed_updates": {`["message"]`}}, pollSec+15)
@@ -434,6 +446,10 @@ func (r *Runner) Run() error {
 				}
 				if len(q) >= r.RateN {
 					r.Log(fmt.Sprintf("rate limit: dropped update %d (chat %d)", uid, cid))
+					if time.Since(rateWarn[cid]) > time.Minute { // tell the sender once a minute instead of ignoring them silently
+						rateWarn[cid] = time.Now()
+						call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(cid)}, "text": {"You're sending messages faster than I answer, so I skipped some. Wait a minute, then send the one you still need."}}, 15)
+					}
 				} else {
 					rate[cid] = append(q, now)
 					sent := false
@@ -474,6 +490,9 @@ func (r *Runner) Run() error {
 					}
 					if reply == "" && !sent {
 						reply = r.reply(text, fmt.Sprint(cid))
+					}
+					if reply == "" {
+						sent = true // rate-limited: stay quiet instead of sending an empty message
 					}
 					for a := 0; a < 3 && !sent; a++ {
 						_, err := call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(cid)}, "text": {reply}}, 30)
