@@ -459,8 +459,15 @@ func (r *Runner) Run() error {
 						call(r.T, r.API, r.Token, "sendChatAction", url.Values{"chat_id": {fmt.Sprint(cid)}, "action": {"typing"}}, 5)
 					}
 					var reply string
-					if r.Chat != nil && r.Chat.Chess != nil {
-						if cr, okc := r.Chat.Chess.Handle(fmt.Sprint(cid), text); okc {
+					if r.Chat != nil {
+						var cr *ChessReply
+						okc := false
+						for _, gm := range r.Chat.Games {
+							if cr, okc = gm.Handle(fmt.Sprint(cid), text); okc {
+								break
+							}
+						}
+						if okc {
 							reply = cr.Text
 							if len(cr.PNG) > 0 {
 								if ps, okp := r.T.(PhotoSender); okp {

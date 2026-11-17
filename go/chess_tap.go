@@ -181,12 +181,19 @@ func (r *Runner) handleTap(cq map[string]any) {
 	answer := func(t string) {
 		call(r.T, r.API, r.Token, "answerCallbackQuery", url.Values{"callback_query_id": {id}, "text": {t}}, 15)
 	}
-	if r.Chat == nil || r.Chat.Chess == nil || cidf == 0 || typ != "private" {
+	if r.Chat == nil || cidf == 0 || typ != "private" {
 		answer("")
 		return
 	}
 	chat := fmt.Sprint(int64(cidf))
-	popup, markup, rep := r.Chat.Chess.Tap(chat, data)
+	var popup, markup string
+	var rep *ChessReply
+	for _, gm := range r.Chat.Games {
+		if strings.HasPrefix(data, gm.Prefix()) {
+			popup, markup, rep = gm.Tap(chat, data)
+			break
+		}
+	}
 	answer(popup)
 	mid := fmt.Sprint(int64(midf))
 	switch {
@@ -205,3 +212,12 @@ func (r *Runner) handleTap(cq map[string]any) {
 		call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {chat}, "text": {rep.Text}}, 30)
 	}
 }
+
+// GameHandler is one board game: text commands, button taps, and the callback-data prefix it owns.
+type GameHandler interface {
+	Handle(chat, text string) (*ChessReply, bool)
+	Tap(chat, data string) (popup, markup string, rep *ChessReply)
+	Prefix() string
+}
+
+func (c *Chess) Prefix() string { return "cm:" }
