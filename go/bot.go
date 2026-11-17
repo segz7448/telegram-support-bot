@@ -97,7 +97,7 @@ func (c CurlTransport) Post(api, token, method string, params url.Values, timeou
 		}
 	}
 	// -q must be the first argument: ignore any default curlrc (proxy/verbose/output settings).
-	args := []string{"-q", "-sS", "--max-time", fmt.Sprint(timeoutSec)}
+	args := []string{"-q", "-sS", "--connect-timeout", "15", "--max-time", fmt.Sprint(timeoutSec)}
 	if strings.HasPrefix(api, "https://") {
 		args = append(args, "--proto", "=https", "--proto-redir", "=https")
 	}
@@ -162,6 +162,8 @@ type Runner struct {
 	MaxErrors  int // 0 = unlimited consecutive-poll-errors (test hook)
 	RateN      int
 	RateS      time.Duration
+	PollSec    int           // getUpdates long-poll seconds (0 = 20). Short polls survive mobile links that drop idle connections.
+	Heartbeat  time.Duration // periodic non-secret status line (0 = off)
 }
 
 // loadOffset: missing file = fresh start (0). An unreadable or malformed file is an error: silently
@@ -210,6 +212,14 @@ func (r *Runner) Run() error {
 	}
 	handled, errs := 0, 0
 	backoff := 1
+	pollSec := r.PollSec
+	if pollSec <= 0 {
+		pollSec = 20
+	}
+	var okPolls, failPolls, consecFail, replies, sendFails int
+	lastOK := time.Time{}
+	lastBeat := time.Now()
+	r.Log(fmt.Sprintf("polling started (long-poll %ds, offset %d)", pollSec, offset))
 	rate := map[int64][]time.Time{}
 	for {
 		if len(rate) > 1000 { // evict idle chats
@@ -219,9 +229,19 @@ func (r *Runner) Run() error {
 				}
 			}
 		}
-		res, err := call(r.T, r.API, r.Token, "getUpdates", url.Values{"offset": {fmt.Sprint(offset)}, "timeout": {"50"}, "allowed_updates": {`["message"]`}}, 70)
+		if r.Heartbeat > 0 && time.Since(lastBeat) >= r.Heartbeat {
+			lastBeat = time.Now()
+			ago := "never"
+			if !lastOK.IsZero() {
+				ago = fmt.Sprintf("%ds ago", int(time.Since(lastOK).Seconds()))
+			}
+			r.Log(fmt.Sprintf("alive: polls ok=%d failed=%d (consecutive failures %d), last ok poll %s, replies sent=%d, send failures=%d", okPolls, failPolls, consecFail, ago, replies, sendFails))
+		}
+		res, err := call(r.T, r.API, r.Token, "getUpdates", url.Values{"offset": {fmt.Sprint(offset)}, "timeout": {fmt.Sprint(pollSec)}, "allowed_updates": {`["message"]`}}, pollSec+15)
 		if err != nil {
 			errs++
+			failPolls++
+			consecFail++
 			r.Log("poll error: " + redact(err.Error(), r.Token))
 			if r.MaxErrors > 0 && errs >= r.MaxErrors {
 				return nil
@@ -231,11 +251,19 @@ func (r *Runner) Run() error {
 				w = ae.RetryAfter
 			}
 			r.Sleep(waitFor(w))
-			if backoff *= 2; backoff > 60 {
-				backoff = 60
+			if backoff *= 2; backoff > 15 { // short cap: a flaky link should retry quickly
+				backoff = 15
 			}
 			continue
 		}
+		if consecFail > 0 {
+			r.Log(fmt.Sprintf("poll recovered after %d failed attempts", consecFail))
+		} else if okPolls == 0 {
+			r.Log("first poll ok: Telegram reachable")
+		}
+		okPolls++
+		consecFail = 0
+		lastOK = time.Now()
 		backoff = 1
 		list, _ := res["result"].([]any)
 		for _, it := range list {
@@ -263,8 +291,11 @@ func (r *Runner) Run() error {
 						_, err := call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(cid)}, "text": {reply}}, 30)
 						if err == nil {
 							sent = true
+							replies++
+							r.Log(fmt.Sprintf("reply sent (total %d)", replies))
 							break
 						}
+						sendFails++
 						r.Log("send error: " + redact(err.Error(), r.Token))
 						w := 1 << a
 						if ae, ok := err.(*APIError); ok && ae.RetryAfter > 0 {
@@ -273,6 +304,7 @@ func (r *Runner) Run() error {
 						r.Sleep(waitFor(w))
 					}
 					if !sent {
+						r.Log("reply undelivered after 3 attempts; recorded in dead-letter file")
 						f, err := os.OpenFile(r.DeadPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 						if err == nil {
 							_, err = fmt.Fprintf(f, "{\"update_id\":%d,\"chat_id\":%d}\n", uid, cid)

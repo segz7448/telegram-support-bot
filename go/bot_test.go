@@ -213,7 +213,7 @@ func TestBackoffBoundedAndNoTokenInLogs(t *testing.T) {
 	r.API = "http://127.0.0.1:1"
 	r.MaxErrors = 8
 	r.Run()
-	want := []int{1, 2, 4, 8, 16, 32, 60}
+	want := []int{1, 2, 4, 8, 15, 15, 15}
 	for i, w := range want {
 		if (*slept)[i] != time.Duration(w)*time.Second {
 			t.Fatalf("backoff %v", *slept)
@@ -391,5 +391,24 @@ func TestResolveCurlNoLookPath(t *testing.T) {
 	}
 	if _, err := resolveCurlIn("", "/nonexistent", nil); err == nil || !strings.Contains(err.Error(), "TG_CURL") {
 		t.Fatal(err)
+	}
+}
+
+func TestObservabilityAndRecovery(t *testing.T) {
+	f, r, _, logs, _ := setup(t, nil)
+	f.updates = []map[string]any{msg(1, "hello", "private")}
+	r.MaxUpdates = 1
+	r.Heartbeat = time.Nanosecond
+	if err := r.Run(); err != nil {
+		t.Fatal(err)
+	}
+	j := strings.Join(*logs, "\n")
+	for _, want := range []string{"polling started", "first poll ok", "reply sent (total 1)", "alive: polls ok="} {
+		if !strings.Contains(j, want) {
+			t.Fatalf("missing %q in logs:\n%s", want, j)
+		}
+	}
+	if strings.Contains(j, tok) || strings.Contains(j, "hello") || strings.Contains(j, "42") {
+		t.Fatalf("log leaks token, content or chat id:\n%s", j)
 	}
 }

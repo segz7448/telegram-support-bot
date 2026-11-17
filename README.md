@@ -49,3 +49,8 @@ No token is stored in this repo. Never commit one.
 - The binary no longer uses `exec.LookPath`/`exec.Command("curl")` name lookup: Android's seccomp kills processes on `faccessat2` (SIGSYS). It resolves curl itself with `stat` over PATH plus `/system/bin` etc., then runs the absolute path. Set `TG_CURL=/system/bin/curl` to pin it.
 - `TG_TOKEN_FILE` is read directly by the binary (and by `start.sh` with `head`, not `[ -r ]`).
 - Checked on a Linux host with `strace -f`: zero access/faccessat calls from the bot process while it spawned curl many times. NOT yet verified on the phone's kernel (4.19.157) itself; Telegram TLS from the phone is also unverified until a live run.
+
+## Resilience and logs (flaky mobile links)
+- Long-poll is 20s (curl max-time 35s, connect timeout 15s) instead of 50s/70s, so idle-dropped connections fail fast. Retry backoff is 1,2,4,8,15s (capped at 15s).
+- Non-secret log lines: "polling started", "first poll ok", "poll recovered after N failed attempts", "reply sent (total N)", "reply undelivered...", and a "alive: ..." counter line every 10 minutes. No token, message text or chat ids are logged. Poll errors still print only the curl error text (token redacted).
+- Local tests cannot show that replies work on the phone; only a live message test can.
