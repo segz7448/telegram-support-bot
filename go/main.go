@@ -34,6 +34,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "--selftest-games" {
+		if !SelfTestGames(dir, func(s string) { fmt.Fprintln(os.Stderr, s) }) {
+			os.Exit(1)
+		}
+		fmt.Println("games selftest passed")
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--selftest-chat" {
 		if !SelfTestChat(tools, curlPath, func(s string) { fmt.Fprintln(os.Stderr, s) }) {
 			os.Exit(1)
