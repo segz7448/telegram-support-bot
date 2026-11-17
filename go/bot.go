@@ -381,6 +381,12 @@ func (r *Runner) Run() error {
 				r.Log("scheduled news sent")
 			}
 		}
+		if r.Chat != nil && r.Chat.Rel != nil {
+			for _, m := range r.Chat.Rel.Tick(time.Now()) {
+				call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {m.Chat}, "text": {m.Text}, "disable_web_page_preview": {"true"}}, 30)
+				r.Log("release notice sent")
+			}
+		}
 		if r.Chat != nil && r.Chat.Rem != nil {
 			for _, m := range r.Chat.Rem.Tick(time.Now()) {
 				call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {m.Chat}, "text": {m.Text}}, 30)

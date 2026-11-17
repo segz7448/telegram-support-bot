@@ -253,6 +253,7 @@ type Chat struct {
 	Budget time.Duration // total time for search + page fetches
 	Know   *Knowledge    // owner-taught facts (nil = off)
 	Quiz   *Quiz         // quiz over the taught facts (nil = off)
+	Rel    *Releases     // owner's GitHub release watches (nil = off)
 	GH     GitHubGetter  // keyless public GitHub repository search (nil = off)
 	News   *News         // keyless news headlines and owner daily digest (nil = off)
 	Rem    *Reminders    // in-bot reminders (nil = off)
@@ -712,6 +713,11 @@ func (c *Chat) Reply(chat, text string) string {
 	}
 	if c.Notes != nil {
 		if r, ok := c.Notes.Handle(chat, text); ok {
+			return r
+		}
+	}
+	if c.Rel != nil {
+		if r, ok := c.Rel.Handle(chat, text); ok {
 			return r
 		}
 	}
