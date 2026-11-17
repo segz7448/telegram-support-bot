@@ -576,4 +576,4 @@ func (r *Runner) Run() error {
 	}
 }
 
-const photoHelp = "Send a picture with a caption saying what to do. I can: sharpen, black and white, sepia, brighter / darker, more contrast / less contrast, rotate left / right / 180, mirror, resize 50%. You can combine them (for example: black and white, more contrast, sharpen). It is local and not AI: sharpening can't bring back detail that blur removed."
+const photoHelp = "Send a picture with a caption saying what to do. I can: sharpen, black and white, sepia, brighter / darker, more contrast / less contrast, rotate left / right / 180, mirror, flip upside down, crop square, blur, invert colours, resize 50%. You can combine them (for example: black and white, more contrast, sharpen). It is local and not AI: sharpening can't bring back detail that blur removed."

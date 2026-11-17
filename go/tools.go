@@ -96,7 +96,7 @@ const helpGeneral = "I'm a chat bot running on a phone. I'm not a language model
 	"Reminders: remind me at 6pm to call mum / in 20 minutes to ... / every day at 8am to ...; reminders; cancel reminder 2. Notes: note: buy milk #shopping; task: call bank; notes; tasks; tags; done 2. Text: word count: ..., uppercase: ..., base64 encode: ..., sha256: ..., pretty json: ....\n" +
 	"News: say \"news\", \"news business\" or \"news about forex\" for headlines from BBC News feeds (shown unchanged, not checked by me). The owner can say \"daily news at 8:00\" (bot time zone), \"daily news status\" or \"daily news off\".\n" +
 	"GitHub: say e.g. find github repos about weather apps. Public repositories only, GitHub's own relevance order, not a quality or safety check.\n" +
-	"Pictures: send a picture with a caption such as: sharpen, black and white, sepia, brighter, darker, more contrast, rotate right, mirror, resize 50%. Local edits, no AI; sharpening can't restore lost detail.\n" +
+	"Pictures: send a picture with a caption such as: sharpen, black and white, sepia, brighter, darker, more contrast, rotate right, mirror, flip upside down, crop square, blur, invert, resize 50%. Local edits, no AI; sharpening can't restore lost detail.\n" +
 	"Also: units (5 km in miles), money (100 usd to eur), weather in Lagos, define serendipity, wiki Alan Turing.\n" +
 	"The owner can teach me: remember that my wifi name is Blue / forget my wifi name / what do you know. Say whoami to see your Telegram id.\n" +
 	"I can't write essays, poems or programs, or read text in pictures. When I look something up, your words go to a web search service and the sites I read. I only remember the last topic of the chat, in memory."

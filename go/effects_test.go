@@ -5,7 +5,9 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"image/png"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -124,5 +126,61 @@ func TestEffectsOnRealPhoto(t *testing.T) {
 		}
 		os.WriteFile("/tmp/fx_"+name+".jpg", out, 0o644)
 		t.Log(name, dims, len(out))
+	}
+}
+
+func TestPhotoToolkitExtras(t *testing.T) {
+	// 40x24 test picture: left half red, right half blue, top row marked green.
+	m := image.NewRGBA(image.Rect(0, 0, 40, 24))
+	for y := 0; y < 24; y++ {
+		for x := 0; x < 40; x++ {
+			c := color.RGBA{200, 0, 0, 255}
+			if x >= 20 {
+				c = color.RGBA{0, 0, 200, 255}
+			}
+			if y < 6 {
+				c = color.RGBA{0, 200, 0, 255}
+			}
+			m.SetRGBA(x, y, c)
+		}
+	}
+	var in bytes.Buffer
+	png.Encode(&in, m)
+	run := func(caption string) image.Image {
+		out, _, err := EditImage(in.Bytes(), parseOps(caption))
+		if err != nil {
+			t.Fatalf("%s: %v", caption, err)
+		}
+		im, err := jpeg.Decode(bytes.NewReader(out))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return im
+	}
+	near := func(c color.Color, r, g, b int) bool {
+		cr, cg, cb, _ := c.RGBA()
+		d := func(a uint32, w int) bool { x := int(a>>8) - w; return x > -40 && x < 40 }
+		return d(cr, r) && d(cg, g) && d(cb, b)
+	}
+	if sq := run("crop square"); sq.Bounds().Dx() != 24 || sq.Bounds().Dy() != 24 {
+		t.Errorf("square: %v", sq.Bounds())
+	}
+	if f := run("flip vertically"); !near(f.At(5, 21), 0, 200, 0) || !near(f.At(5, 2), 200, 0, 0) {
+		t.Errorf("vflip: top row should now be at the bottom")
+	}
+	if m := run("flip"); !near(m.At(5, 12), 0, 0, 200) {
+		t.Errorf("plain flip must stay a left-right mirror")
+	}
+	if iv := run("invert colors"); !near(iv.At(5, 12), 55, 255, 255) {
+		t.Errorf("invert: %v", iv.At(5, 12))
+	}
+	if ops := parseOps("blur it"); len(ops) != 1 || ops[0].name != "blur" {
+		t.Errorf("blur parse: %v", ops)
+	}
+	if _, _, err := EditImage(in.Bytes(), parseOps("blur")); err != nil {
+		t.Error(err)
+	}
+	if d := describeOps(parseOps("crop square, invert, blur, flip upside down")); !strings.Contains(d, "centred square") || !strings.Contains(d, "inverted") || !strings.Contains(d, "blur") || !strings.Contains(d, "upside down") {
+		t.Errorf("describe: %q", d)
 	}
 }

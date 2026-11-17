@@ -33,6 +33,10 @@ var (
 	reRotate   = regexp.MustCompile(`(?i)\brotate\s*(left|right|180|90|270)?\s*(?:by\s*)?(90|180|270)?\b|\bturn\s+(left|right|around)\b`)
 	reResize   = regexp.MustCompile(`(?i)\b(?:resize|scale|shrink|make (?:it )?smaller)\b[^0-9%a-z]*(?:to |by )?(\d{1,3})\s*%|\b(half size|half the size)\b`)
 	reFlip     = regexp.MustCompile(`(?i)\b(mirror|flip)\b`)
+	reVFlip    = regexp.MustCompile(`(?i)\b(flip (?:it )?(?:vertical|vertically|upside down|top to bottom)|upside[- ]down|flip (?:top|up) (?:to|and) (?:bottom|down))\b`)
+	reCropSq   = regexp.MustCompile(`(?i)\b(crop (?:to )?(?:a )?square|square crop|make (?:it )?square)\b`)
+	reBlur     = regexp.MustCompile(`(?i)\b(blur|blurry|soften|soft focus)\b`)
+	reInvert   = regexp.MustCompile(`(?i)\b(invert|negative|invert colou?rs)\b`)
 )
 
 // parseOps reads the caption. It returns the ops in a fixed safe order and a short list of what it understood.
@@ -58,7 +62,12 @@ func parseOps(caption string) []imgOp {
 			ops = append(ops, imgOp{"resize", pct})
 		}
 	}
-	if reFlip.MatchString(caption) {
+	if reCropSq.MatchString(caption) {
+		ops = append(ops, imgOp{"square", 0})
+	}
+	if reVFlip.MatchString(caption) {
+		ops = append(ops, imgOp{"vflip", 0})
+	} else if reFlip.MatchString(caption) {
 		ops = append(ops, imgOp{"mirror", 0})
 	}
 	switch {
@@ -77,8 +86,13 @@ func parseOps(caption string) []imgOp {
 	} else if reLessCon.MatchString(caption) {
 		ops = append(ops, imgOp{"contrast", 75})
 	}
+	if reInvert.MatchString(caption) {
+		ops = append(ops, imgOp{"invert", 0})
+	}
 	if reSharpen.MatchString(caption) {
 		ops = append(ops, imgOp{"sharpen", 0})
+	} else if reBlur.MatchString(caption) {
+		ops = append(ops, imgOp{"blur", 0})
 	}
 	return ops
 }
@@ -93,6 +107,14 @@ func describeOps(ops []imgOp) string {
 			p = append(p, fmt.Sprintf("resized to %d%%", o.n))
 		case "mirror":
 			p = append(p, "mirrored left-right")
+		case "vflip":
+			p = append(p, "flipped upside down")
+		case "square":
+			p = append(p, "cropped to a centred square")
+		case "invert":
+			p = append(p, "colours inverted")
+		case "blur":
+			p = append(p, "softened (blur)")
 		case "bw":
 			p = append(p, "black and white")
 		case "sepia":
@@ -143,6 +165,24 @@ func EditImage(data []byte, ops []imgOp) ([]byte, string, error) {
 			cur = rotateRGBA(cur, o.n)
 		case "mirror":
 			cur = mirrorRGBA(cur)
+		case "vflip":
+			cur = mirrorRGBA(rotateRGBA(cur, 180)) // 180 degrees = left-right + up-down, so undoing left-right leaves up-down
+		case "square":
+			bw, bh := cur.Bounds().Dx(), cur.Bounds().Dy()
+			side := bw
+			if bh < side {
+				side = bh
+			}
+			x0, y0 := (bw-side)/2, (bh-side)/2
+			sq := image.NewRGBA(image.Rect(0, 0, side, side))
+			draw.Draw(sq, sq.Bounds(), cur, image.Pt(x0, y0), draw.Src)
+			cur = sq
+		case "blur":
+			cur = unsharp(cur, 4, -1.0)
+		case "invert":
+			for i := 0; i+3 < len(cur.Pix); i += 4 {
+				cur.Pix[i], cur.Pix[i+1], cur.Pix[i+2] = 255-cur.Pix[i], 255-cur.Pix[i+1], 255-cur.Pix[i+2]
+			}
 		case "resize":
 			w, h := cur.Bounds().Dx()*o.n/100, cur.Bounds().Dy()*o.n/100
 			if w < 16 || h < 16 || w > maxImageSide || h > maxImageSide || w*h > maxImagePixels {
