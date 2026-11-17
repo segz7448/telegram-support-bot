@@ -84,7 +84,6 @@ func NewTools(f Fetcher, log func(string)) *Tools {
 		GeoAPI:  "https://geocoding-api.open-meteo.com/v1/search",
 		WxAPI:   "https://wttr.in/",
 		FxAPI:   "https://api.frankfurter.dev/v1/latest",
-		ErAPI:   "https://open.er-api.com/v6/latest/USD",
 		cache:   map[string]cacheEntry{}}
 }
 

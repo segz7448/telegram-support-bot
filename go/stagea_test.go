@@ -11,6 +11,9 @@ import (
 func TestDataUnitsAndNairaFallback(t *testing.T) {
 	tl, f, _ := newFake(t)
 	f.routes["open.er-api"] = `{"result":"success","time_last_update_utc":"Tue, 17 Nov 2026 00:02:31 +0000","rates":{"USD":1,"NGN":1500,"EUR":0.9,"GBP":0.8,"JPY":150,"KES":130,"GHS":15,"ZAR":18,"AUD":1.5,"CAD":1.4,"CHF":0.9,"CNY":7,"INR":83,"MXN":17,"BRL":5,"SEK":10,"NOK":10,"DKK":6.8,"PLN":4,"CZK":23,"HUF":360,"RON":4.5,"TRY":34,"THB":35,"SGD":1.3,"HKD":7.8,"NZD":1.6,"KRW":1300,"PHP":57,"IDR":15500,"MYR":4.4,"ILS":3.7,"ISK":138,"BGN":1.8,"AED":3.67,"SAR":3.75,"EGP":49,"PKR":278,"BDT":120,"VND":25000,"COP":4000,"ARS":1000,"CLP":950,"PEN":3.7,"UAH":41,"RUB":95,"QAR":3.64,"KWD":0.3}}`
+	if r, ok := tl.Pre("100 usd to ngn"); !ok || !strings.Contains(r, "European Central Bank") {
+		t.Fatalf("fallback must be off by default: %q", r)
+	}
 	tl.ErAPI = "https://open.er-api.com/v6/latest/USD"
 	r, ok := tl.Pre("100 usd to ngn")
 	if !ok || !strings.Contains(r, "150000 NGN") || !strings.Contains(r, "exchangerate-api.com") || !strings.Contains(r, "2026") {

@@ -92,6 +92,9 @@ func main() {
 		chat.Rem = &Reminders{Path: os.Getenv("TG_REMINDERS_FILE")}
 		chat.Notes = &Notes{Path: os.Getenv("TG_NOTES_FILE")}
 		chat.Admin = &Admin{Owner: strings.TrimSpace(os.Getenv("TG_OWNER_ID")), Version: "tgbot " + Version, Start: time.Now(), Know: chat.Know, Notes: chat.Notes, Rem: chat.Rem, News: chat.News}
+		if os.Getenv("TG_FX_FALLBACK") == "1" {
+			tools.ErAPI = "https://open.er-api.com/v6/latest/USD"
+		}
 		tools.General = true
 		fmt.Fprintln(os.Stderr, "general chat mode (no language model): search + page extraction; search key present:", srch != nil)
 	}

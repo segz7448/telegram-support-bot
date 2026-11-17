@@ -17,6 +17,9 @@ const erTTL = 6 * time.Hour // the source updates once a day and asks callers no
 // currencyER converts via ExchangeRate-API's open endpoint (no key; attribution required; caching allowed). It is
 // used only for currencies outside the ECB list. One fetch per six hours covers every conversion.
 func (t *Tools) currencyER(v float64, from, to string) string {
+	if t.ErAPI == "" { // off unless the owner enables it (TG_FX_FALLBACK=1): provider terms are still being checked
+		return "I only know the currencies in the European Central Bank's daily list (like USD, EUR, GBP, JPY), so I can't convert " + from + " or " + to + " yet."
+	}
 	if t.erRates == nil || t.Now().Sub(t.erAt) > erTTL {
 		if !t.allow() {
 			return "I'm doing a lot of lookups right now. Please try again in a minute."
