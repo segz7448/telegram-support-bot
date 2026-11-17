@@ -173,6 +173,9 @@ func (r *Releases) Tick(now time.Time) []NewsSend {
 	if idx < 0 {
 		return nil
 	}
+	if _, off := gateOff("github"); off {
+		return nil // no request, and the watch is left untouched
+	}
 	w := &f.Watches[idx]
 	w.Checked = now.UTC().Format(time.RFC3339) // written before the request so a crash can't cause a hot loop
 	saveJSON(r.Path, f)

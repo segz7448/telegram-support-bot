@@ -147,6 +147,9 @@ func cleanText(s string, max int) string {
 
 // GitHubReply runs one bounded search and formats the answer. It never returns an error: failures become honest text.
 func GitHubReply(g GitHubGetter, topic string, now func() time.Time) string {
+	if m, off := gateOff("github"); off {
+		return m
+	}
 	if g == nil {
 		return "Repository search isn't available on this connection."
 	}

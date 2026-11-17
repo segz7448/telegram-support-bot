@@ -525,6 +525,9 @@ func (t *Tools) convert(low string) (string, bool) {
 }
 
 func (t *Tools) currency(v float64, from, to string) string {
+	if m, off := gateOff("fx"); off {
+		return m
+	}
 	key := fmt.Sprintf("fx|%s|%s|%g", from, to, v)
 	if r, ok := t.cached(key, time.Hour); ok {
 		return r
@@ -566,6 +569,9 @@ func (t *Tools) weather(place string) string { return t.weatherF(place, false, f
 
 // weatherF with forecast=true adds a per-day outlook (up to 3 days) taken from the same wttr.in response: no extra request.
 func (t *Tools) weatherF(place string, forecast, sun bool) string {
+	if m, off := gateOff("weather"); off {
+		return m
+	}
 	if place == "" || len(place) > 60 {
 		return "Tell me the place, like: weather in Lagos."
 	}
@@ -673,6 +679,9 @@ func (t *Tools) weatherF(place string, forecast, sun bool) string {
 var reTag = regexp.MustCompile(`<[^>]*>`)
 
 func (t *Tools) define(word string) string {
+	if m, off := gateOff("define"); off {
+		return m
+	}
 	word = strings.TrimSpace(word)
 	if !regexp.MustCompile(`^[a-z][a-z' -]{0,40}$`).MatchString(word) {
 		return "I can only define a single English word or short phrase."
@@ -739,6 +748,9 @@ func contentWords(s string) []string {
 }
 
 func (t *Tools) wiki(q string, question bool) string {
+	if m, off := gateOff("wiki"); off {
+		return m
+	}
 	q = strings.TrimSpace(q)
 	cw := contentWords(q)
 	if len(cw) == 0 || len(q) > 150 {

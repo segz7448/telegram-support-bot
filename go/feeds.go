@@ -173,6 +173,9 @@ func (f *Feeds) Handle(chat, text string) (string, bool) {
 }
 
 func (f *Feeds) get(d feedDef) ([]NewsItem, error) {
+	if m, off := gateOff("feeds"); off {
+		return nil, fmt.Errorf("%s", m)
+	}
 	f.mu.Lock()
 	if f.cache == nil {
 		f.cache = map[string]feedCache{}

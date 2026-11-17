@@ -181,6 +181,11 @@ func (n *News) onDemand(rest string) string {
 
 // fetch returns up to newsMaxItems items. Only fixed BBC feed URLs are fetched.
 func (n *News) fetch(section, query string) ([]NewsItem, string, error) {
+	if _, isFeed := strings.CutPrefix(section, "feed:"); !isFeed {
+		if m, off := gateOff("news"); off {
+			return nil, "", fmt.Errorf("%s", m)
+		}
+	}
 	if name, ok := strings.CutPrefix(section, "feed:"); ok {
 		if n.F == nil || !n.F.enabled() {
 			return nil, "", fmt.Errorf("Custom feeds are switched off, so I can't build this digest.")

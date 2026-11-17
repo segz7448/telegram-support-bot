@@ -141,6 +141,7 @@ func main() {
 		chat.Admin.RatePerMin = rateN
 	}
 	stateBotID = botIDFromToken(tok)
+	loadSourceGates()
 	statePath, deadPath, serr := resolveStatePaths(dir, stateOpts{ExtState: os.Getenv("TG_STATE_FILE"), ExtDead: os.Getenv("TG_DEAD_LETTER_FILE"), AllowFresh: os.Getenv("TG_STATE_ALLOW_FRESH") == "1", Require: os.Getenv("TG_STATE_REQUIRE_EXISTING") == "1"}, func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
 	if serr != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", serr)
