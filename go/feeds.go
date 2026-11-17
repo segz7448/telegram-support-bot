@@ -314,3 +314,31 @@ func ownHostLink(raw, host string) string {
 	u.RawQuery, u.Fragment = "", ""
 	return u.String()
 }
+
+// Lookup returns the approved feed called name (nil when there is none).
+func (f *Feeds) Lookup(name string) (*feedDef, error) {
+	f.mu.Lock()
+	ff, err := f.load()
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	d := f.find(ff, name)
+	if d == nil {
+		return nil, nil
+	}
+	c := *d
+	return &c, nil
+}
+
+// Items fetches (or serves from cache) an approved feed's headlines for a digest.
+func (f *Feeds) Items(name string) ([]NewsItem, error) {
+	d, err := f.Lookup(name)
+	if err != nil {
+		return nil, fmt.Errorf("I couldn't read the feeds file.")
+	}
+	if d == nil {
+		return nil, fmt.Errorf("The feed %q is no longer approved, so I can't send this digest. The owner can set daily news again.", name)
+	}
+	return f.get(*d)
+}

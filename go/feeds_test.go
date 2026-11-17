@@ -98,3 +98,25 @@ func TestFeedsRedirectsPrivateAndTypes(t *testing.T) {
 		t.Errorf("off: %q", r)
 	}
 }
+
+func TestCustomFeedAsDailyDigestSource(t *testing.T) {
+	f, _, now := feedsFor(t, map[string]PageResult{"https://example.org/rss.xml": {Status: 200, Body: []byte(rssSample), ContentType: "application/rss+xml"}})
+	f.Handle("42", "add feed https://example.org/rss.xml as news")
+	n := &News{G: &fakeFeed{body: bbcXML, code: 200}, F: f, Path: filepath.Join(t.TempDir(), "news.json"), Owner: "42"}
+	n.Now = func() time.Time { return *now }
+	if r, _ := n.Handle("7", "daily news at 8am from feed news"); !strings.Contains(r, "Only the bot owner") {
+		t.Fatalf("non-owner: %q", r)
+	}
+	if r, _ := n.Handle("42", "daily news at 8am from feed ghost"); !strings.Contains(r, "no approved feed called ghost") {
+		t.Fatalf("unknown feed: %q", r)
+	}
+	r, _ := n.Handle("42", "daily news at 8am from feed news")
+	if !strings.Contains(r, "Daily news set for 08:00") || !strings.Contains(r, "feed:news") {
+		t.Fatalf("set: %q", r)
+	}
+	*now = time.Date(2026, 11, 17, 8, 5, 0, 0, time.UTC)
+	out := n.Tick(*now)
+	if len(out) != 1 || !strings.Contains(out[0].Text, "Story one") || strings.Contains(out[0].Text, "BBC") || strings.Contains(out[0].Text, "evil.test") {
+		t.Fatalf("digest from feed: %v", out)
+	}
+}

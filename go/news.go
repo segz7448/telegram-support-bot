@@ -52,6 +52,7 @@ type NewsSchedule struct {
 }
 
 type News struct {
+	F     *Feeds       // owner-approved custom feeds that can be the daily digest source (nil = BBC only)
 	G     GitHubGetter // plain https GET (no secrets); name kept from the GitHub feature
 	Path  string       // schedule file (outside the deployment dir); "" = scheduling off
 	Owner string
@@ -97,6 +98,7 @@ var (
 	reNewsAt    = regexp.MustCompile(`(?i)\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b`)
 	reNewsOff   = regexp.MustCompile(`(?i)^\s*(?:(?:stop|cancel|turn off|disable|pause) (?:the )?(?:daily|scheduled) (?:news|headlines)|(?:daily|scheduled) (?:news|headlines) (?:off|stop|cancel))\b`)
 	reNewsStat  = regexp.MustCompile(`(?i)^\s*(?:daily|scheduled) (?:news|headlines) (?:status|settings|schedule)\b`)
+	reNewsFeed  = regexp.MustCompile(`(?i)\b(?:from|using|via)\s+feed\s+([A-Za-z0-9][A-Za-z0-9 _-]{0,29}?)\s*$`)
 	reNewsAbout = regexp.MustCompile(`(?i)\b(?:about|on|for|regarding|related to)\s+(.+)$`)
 )
 
@@ -179,6 +181,16 @@ func (n *News) onDemand(rest string) string {
 
 // fetch returns up to newsMaxItems items. Only fixed BBC feed URLs are fetched.
 func (n *News) fetch(section, query string) ([]NewsItem, string, error) {
+	if name, ok := strings.CutPrefix(section, "feed:"); ok {
+		if n.F == nil || !n.F.enabled() {
+			return nil, "", fmt.Errorf("Custom feeds are switched off, so I can't build this digest.")
+		}
+		items, err := n.F.Items(name)
+		if err != nil {
+			return nil, "", err
+		}
+		return items, "feed " + name, nil
+	}
 	var urls []string
 	if query != "" {
 		for _, s := range []string{"top", "world", "business", "technology"} {
@@ -447,6 +459,17 @@ func (n *News) cmdSet(chat, rest string) string {
 	section, query := parseSection(topicPart)
 	if strings.TrimSpace(topicPart) == "" {
 		section, query = "top", ""
+	}
+	if fm := reNewsFeed.FindStringSubmatch(topicPart); fm != nil {
+		name := strings.TrimSpace(fm[1])
+		if n.F == nil || !n.F.enabled() {
+			return "Custom feeds are switched off on this bot, so I can't use one for the daily digest."
+		}
+		d, err := n.F.Lookup(name)
+		if err != nil || d == nil {
+			return "I have no approved feed called " + name + ". The owner can add one first: add feed https://... as name"
+		}
+		section, query = "feed:"+d.Name, ""
 	}
 	s := &NewsSchedule{Chat: chat, Hour: h, Min: mi, Zone: zoneName(), Section: section, Query: query, Created: n.now().UTC().Format(time.RFC3339)}
 	if _, err := n.load(); err != nil {

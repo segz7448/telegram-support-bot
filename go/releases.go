@@ -233,6 +233,7 @@ func relURLOK(raw, repo, tag string) bool {
 	if err != nil || u.Scheme != "https" || u.Host != "github.com" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return false
 	}
-	want := "/" + repo + "/releases/tag/" + tag
-	return strings.EqualFold(u.Path, want)
+	prefix := "/" + repo + "/releases/tag/"
+	// repository names are case-insensitive on GitHub; the tag must match exactly (compared after decoding)
+	return len(u.Path) > len(prefix) && strings.EqualFold(u.Path[:len(prefix)], prefix) && u.Path[len(prefix):] == tag
 }

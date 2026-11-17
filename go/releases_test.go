@@ -66,7 +66,7 @@ func TestReleasesWatchFlow(t *testing.T) {
 	if out := r.Tick(now.Add(270 * time.Minute)); len(out) != 1 || !strings.Contains(out[0].Text, "https://github.com/golang/go/releases/tag/release%2F2026+rc%201") {
 		t.Fatalf("odd tag with encoded url: %v", out)
 	}
-	for i, bad := range []string{"https://evil.test/golang/go/releases/tag/v9", "http://github.com/golang/go/releases/tag/v9", "https://github.com/other/repo/releases/tag/v9", "https://github.com/golang/go/releases/tag/v8", "https://github.com.evil.test/golang/go/releases/tag/v9", "https://user@github.com/golang/go/releases/tag/v9", "https://github.com/golang/go/releases/tag/v9?x=1"} {
+	for i, bad := range []string{"https://evil.test/golang/go/releases/tag/v9", "http://github.com/golang/go/releases/tag/v9", "https://github.com/other/repo/releases/tag/v9", "https://github.com/golang/go/releases/tag/v8", "https://github.com/golang/go/releases/tag/V9", "https://github.com.evil.test/golang/go/releases/tag/v9", "https://user@github.com/golang/go/releases/tag/v9", "https://github.com/golang/go/releases/tag/v9?x=1"} {
 		f.body = relU("v9", bad, "")
 		out := r.Tick(now.Add(time.Duration(340+140*i) * time.Minute))
 		if len(out) != 1 || strings.Contains(out[0].Text, "evil.test") || strings.Contains(out[0].Text, "other/repo") || strings.Contains(out[0].Text, "releases/tag/v8") || !strings.Contains(out[0].Text, "not showing it") {
