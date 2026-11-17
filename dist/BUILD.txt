@@ -1,1 +1,1 @@
-source commit e75b42b9ade686af6f32847f7a15d64248f2a8c1; built CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' from go/
+source commit 1c4cc9dc9c873958922336c2f9205521cca0e2bd; built CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' from go/
