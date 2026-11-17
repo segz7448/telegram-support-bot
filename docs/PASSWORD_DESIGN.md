@@ -10,3 +10,10 @@ Built (owner-only, off unless TG_PASSWORD_DIR is set):
 Limits (honest): the file sits in plain text on the phone until deleted; anyone with access to the phone's app storage can read it; it is not a password manager. For long-term storage use a real password manager. Whether the owner can open files in that folder on the phone depends on the phone app surface and must be checked there.
 
 Not built: advice-only text, or any password typed by the user into chat (the bot cannot stop someone typing one; the reply text says never to).
+
+## Status and threat model (corrected)
+- NOT a completed secure-delivery solution. Keep TG_PASSWORD_DIR unset (generator OFF) in production. Do not generate real credentials in tests.
+- A 0600 file is not protected credential storage: it protects only against other app users on an unrooted phone. It does not protect against a rooted or backed-up phone, a malicious app with storage access, screen capture, or a lost unlocked phone.
+- Owner access route is unverified: the owner may be unable to open the app's private folder at all, which would make the feature unusable. Needs a phone-side check before any claim.
+- Telegram chat delivery is ruled out (not end-to-end encrypted). No hosted endpoint or account is available without authority.
+- Open: a genuinely secure route (for example the owner's own password manager generating the password, with the bot only giving strength guidance) vs this local file. Owner decision, not made.
