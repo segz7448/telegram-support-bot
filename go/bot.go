@@ -335,7 +335,41 @@ func (r *Runner) Run() error {
 					if r.Chat != nil { // best-effort "typing..." while search and page reads run
 						call(r.T, r.API, r.Token, "sendChatAction", url.Values{"chat_id": {fmt.Sprint(cid)}, "action": {"typing"}}, 5)
 					}
-					reply := r.reply(text, fmt.Sprint(cid))
+					var reply string
+					if r.Chat != nil {
+						if png, capt, derr, isDesign := Design(text); isDesign {
+							if derr != "" {
+								reply = derr
+							} else if ps, okp := r.T.(PhotoSender); okp {
+								done := false
+								for a := 0; a < 2 && !done; a++ {
+									raw, perr := ps.PostPhoto(r.API, r.Token, fmt.Sprint(cid), capt, png, filepath.Dir(r.StatePath), 60)
+									var body map[string]any
+									if perr == nil && json.Unmarshal(raw, &body) == nil {
+										if okb, _ := body["ok"].(bool); okb {
+											done = true
+										}
+									}
+									if !done {
+										r.Log("photo send failed (attempt " + fmt.Sprint(a+1) + ")")
+									}
+								}
+								if done {
+									replies++
+									r.Log(fmt.Sprintf("reply sent (total %d, image)", replies))
+									sent = true
+								}
+								if !done {
+									reply = "I drew the image but couldn't upload it. Try again in a minute."
+								}
+							} else {
+								reply = "Images aren't available on this connection."
+							}
+						}
+					}
+					if reply == "" && !sent {
+						reply = r.reply(text, fmt.Sprint(cid))
+					}
 					for a := 0; a < 3 && !sent; a++ {
 						_, err := call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(cid)}, "text": {reply}}, 30)
 						if err == nil {
