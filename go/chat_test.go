@@ -178,3 +178,34 @@ func TestAbstainsOnAmbiguousAndOnWeakEvidence(t *testing.T) {
 		t.Fatalf("should abstain: %q", got)
 	}
 }
+
+const tfa = `<html><head><title>Things Fall Apart - Wikipedia</title></head><body><p>Things Fall Apart is the 1958 debut novel by Nigerian author Chinua Achebe. It is a milestone in African literature.</p>
+<p>In the story Okonkwo is a respected warrior in Umuofia who rises to fame after he defeats a famous wrestler in a contest. Things begin to fall apart for him after he accidentally kills a clansman during a funeral.</p></body></html>`
+
+func TestAuthorQuestionRejectsPlotOnlySentences(t *testing.T) {
+	s := &fakeS{res: []SearchResult{{Title: "Wikipedia - Things Fall Apart", URL: "https://example.com/t", Snippet: "x"}}}
+	c, _, _ := newTestChat(s, map[string]PageResult{"https://example.com/t": page(tfa)}, map[string]string{"example.com": "93.184.216.34"})
+	got := c.Reply("1", "who wrote Things Fall Apart")
+	if !strings.Contains(got, "Chinua Achebe") || strings.Contains(got, "Okonkwo") || strings.Contains(got, "wrestler") {
+		t.Fatalf("%q", got)
+	}
+}
+
+const moon = `<html><head><title>Moon - Wikipedia</title></head><body><p>The Moon is Earth's only natural satellite and it orbits our planet at an average distance of 384,400 km (238,900 mi) from the center of Earth.</p>
+<p>Its mass is 1.2% that of the Earth, and its diameter is 3,474 km, roughly one-quarter of the diameter of Earth.</p></body></html>`
+
+func TestMoonDistanceExcludesMassSentence(t *testing.T) {
+	s := &fakeS{res: []SearchResult{{Title: "Moon - Wikipedia", URL: "https://example.com/m", Snippet: "x"}}}
+	c, _, _ := newTestChat(s, map[string]PageResult{"https://example.com/m": page(moon)}, map[string]string{"example.com": "93.184.216.34"})
+	got := c.Reply("1", "how far is the moon from earth")
+	if !strings.Contains(got, "384,400") || strings.Contains(got, "1.2%") {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestNeverCutsSentenceMidWay(t *testing.T) {
+	long := []string{strings.Repeat("a", 500) + ".", strings.Repeat("b", 500) + "."}
+	if got := fitSentences(long, 900); strings.Contains(got, "b") {
+		t.Fatalf("cut or overflow: %d", len(got))
+	}
+}

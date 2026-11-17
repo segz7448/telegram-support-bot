@@ -425,6 +425,7 @@ func sentences(text string) []string {
 	}
 	var keep []string
 	for _, s := range out {
+		s = noLinks(s) // clean citations first so length and shape checks see the real text
 		if goodSentence(s) {
 			keep = append(keep, s)
 		}
@@ -554,7 +555,7 @@ func hostOf(u string) string {
 }
 
 var (
-	reCite     = regexp.MustCompile(`\[\s*(\d+|[a-z]|citation needed|note \d+)\s*\]`)
+	reCite     = regexp.MustCompile(`\[\s*(\d+|[a-z]|update|citation needed|note \d+)\s*\]`)
 	reSpPun    = regexp.MustCompile(`\s+([,.;:!?)])`)
 	reOpen     = regexp.MustCompile(`\(\s+`)
 	reJunk     = regexp.MustCompile(`(?i)map credit|show map|location within|click here|cookie|subscribe|sign up|all rights reserved|privacy policy`)
@@ -681,6 +682,7 @@ func (c *Chat) Reply(chat, text string) string {
 		}
 	}
 	ranked := rank(query, cands)
+	ranked = requirePredicate(query, cleanTitleOf(srcs), ranked)
 	minCover := 0.34
 	if nt := len(uniqTerms(query)); nt >= 3 {
 		minCover = 0.6
@@ -718,7 +720,7 @@ func (c *Chat) Reply(chat, text string) string {
 		if len(picked) >= 3 {
 			break
 		}
-		if used[cd.text] || cd.cover < minCover || cd.score < 0.55*ranked[0].score {
+		if used[cd.text] || cd.cover < minCover || cd.score < 0.75*ranked[0].score {
 			continue
 		}
 		used[cd.text] = true
@@ -752,7 +754,7 @@ func (c *Chat) Reply(chat, text string) string {
 	}
 	st.srcs = ls
 	st.rest = rest
-	out := trunc(strings.Join(parts, " "), 900) + "\n\n" + srcNote + " " + strings.Join(ls, "  ")
+	out := fitSentences(parts, 900) + "\n\n" + srcNote + " " + strings.Join(ls, "  ")
 	if len(rest) > 0 {
 		out += "\nSay \"more\" for more."
 	}
@@ -781,7 +783,7 @@ var synonyms = map[string][]string{
 	"population": {"inhabitant", "census", "resident", "people"}, "old": {"age", "born", "year"},
 	"far": {"distance", "kilometre", "mile", "km"}, "long": {"length", "kilometre", "mile", "year"},
 	"big": {"size", "area", "square"}, "cost": {"price", "dollar", "usd"}, "price": {"cost", "dollar", "usd"},
-	"die": {"death", "died"}, "built": {"construct", "completed", "opened", "erected"}, "build": {"construct", "completed", "opened"}, "when": {}, "die2": nil, "born": {"birth"}, "found": {"founded", "established"}, "invent": {"inventor", "invented"},
+	"die": {"death", "died"}, "wrote": {"author", "written", "writer", "novel", "book", "published"}, "write": {"author", "written", "writer", "novel", "book"}, "discover": {"discovered", "discoverer"}, "paint": {"painter", "painted"}, "direct": {"directed", "director"}, "built": {"construct", "completed", "opened", "erected"}, "build": {"construct", "completed", "opened"}, "when": {}, "die2": nil, "born": {"birth"}, "found": {"founded", "established"}, "invent": {"inventor", "invented"},
 }
 
 var reRefNoise = regexp.MustCompile(`(?i)↑|\^|archived (from|at|on)|retrieved \d|wayback|\bISBN\b|\bdoi\b|\bS2CID\b|\bPMID\b|\bpp?\. ?\d|^\W*(see also|references|external links)\b|^["“]`)
@@ -789,7 +791,7 @@ var reRefNoise = regexp.MustCompile(`(?i)↑|\^|archived (from|at|on)|retrieved 
 // goodSentence keeps prose and drops footnotes, reference-list lines, list fragments and page chrome.
 func goodSentence(s string) bool {
 	n := len([]rune(s))
-	if n < 40 || n > 450 || reJunk.MatchString(s) || reRefNoise.MatchString(s) {
+	if n < 40 || n > 650 || reJunk.MatchString(s) || reRefNoise.MatchString(s) {
 		return false
 	}
 	words := strings.Fields(s)
@@ -842,3 +844,74 @@ func ambiguousTop(rs []SearchResult) bool {
 	t := strings.ToLower(rs[0].Title + " " + rs[0].Snippet)
 	return strings.Contains(t, "(disambiguation)") || strings.Contains(t, " may refer to") || strings.Contains(t, " commonly refers to")
 }
+
+func cleanTitleOf(srcs []SearchResult) string {
+	if len(srcs) == 0 {
+		return ""
+	}
+	return cleanTitle(srcs[0].Title)
+}
+
+// requirePredicate: words of the question that are NOT the page subject (title) say what is being asked
+// ("wrote", "far", "built"). A sentence must contain one of them (or a synonym), otherwise it only repeats the
+// subject ("Things Fall Apart ...plot...") and is irrelevant. When the subject covers every term, nothing is required.
+func requirePredicate(query, title string, ranked []cand) []cand {
+	subj := map[string]bool{}
+	for _, t := range terms(title) {
+		subj[t] = true
+	}
+	var pred []string
+	for _, t := range uniqTerms(query) {
+		if !subj[t] {
+			pred = append(pred, t)
+		}
+	}
+	if len(pred) == 0 || len(pred) == len(uniqTerms(query)) {
+		return ranked // no subject recognised, or nothing left to ask: other rules apply
+	}
+	var attr []string // the asked-for attribute (far, tall, wrote...) outranks other leftover words (earth, here...)
+	for _, t := range pred {
+		if len(synonyms[t]) > 0 {
+			attr = append(attr, t)
+		}
+	}
+	if len(attr) > 0 {
+		pred = attr
+	}
+	var out []cand
+	for _, c := range ranked {
+		have := map[string]bool{}
+		for _, t := range terms(c.text) {
+			have[t] = true
+		}
+		for _, t := range pred {
+			ok := have[t]
+			for _, x := range synonyms[t] {
+				ok = ok || (have[x] && !unitWord[x])
+			}
+			if ok {
+				out = append(out, c)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// fitSentences joins whole sentences up to max characters; it never cuts a sentence in half.
+func fitSentences(parts []string, max int) string {
+	var sb strings.Builder
+	for i, p := range parts {
+		if i > 0 && sb.Len()+len(p)+1 > max {
+			break
+		}
+		if i > 0 {
+			sb.WriteString(" ")
+		}
+		sb.WriteString(p)
+	}
+	return sb.String()
+}
+
+// unit words appear in many unrelated sentences (a diameter in km is not a distance), so they only help scoring.
+var unitWord = map[string]bool{"metre": true, "meter": true, "feet": true, "kilometre": true, "mile": true, "km": true, "dollar": true, "usd": true, "year": true, "square": true, "people": true}
