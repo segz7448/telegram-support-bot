@@ -594,7 +594,6 @@ func RenderBoard(p Pos, whiteBottom bool, last *Mv) []byte {
 		return margin + f*sq, margin + (7-r)*sq
 	}
 	small := face(fonts.bold, 12)
-	big := face(fonts.bold, 26)
 	for s := 0; s < 64; s++ {
 		x, y := cell(s)
 		c := dark
@@ -612,15 +611,8 @@ func RenderBoard(p Pos, whiteBottom bool, last *Mv) []byte {
 		if v == 0 {
 			continue
 		}
-		cx, cy, rad := x+sq/2, y+sq/2, 21
-		fill, edge, txt := rgb(250, 250, 250), rgb(40, 40, 40), rgb(30, 30, 30)
-		if v < 0 {
-			fill, edge, txt = rgb(45, 45, 48), rgb(240, 240, 240), rgb(245, 245, 245)
-		}
-		chessDisc(img, cx, cy, rad, edge)
-		chessDisc(img, cx, cy, rad-3, fill)
-		l := string(" PNBRQK"[abs8(v)])
-		drawText(img, big, txt, cx-textW(big, l)/2, cy+9, l)
+		sp := sprite(int(v), sq-2)
+		draw.Draw(img, image.Rect(x+1, y+1, x+sq-1, y+sq-1), sp, image.Point{}, draw.Over)
 	}
 	for i := 0; i < 8; i++ {
 		fl, rk := string(rune('a'+i)), strconv.Itoa(i+1)
