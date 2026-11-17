@@ -745,6 +745,13 @@ func (c *Chat) Reply(chat, text string) string {
 		st.rest = nil
 		return "That could mean several things (" + cleanTitle(results[0].Title) + " has more than one meaning). Tell me which one you mean, e.g. add a few words of detail. " + results[0].URL
 	}
+	if kept, dropped := entityFilter(query, results); dropped > 0 {
+		if len(kept) == 0 {
+			st.rest = nil
+			return "The pages I found were about related but different subjects (not exactly what you named), so I won't guess. Try rephrasing with the full name."
+		}
+		results = kept
+	}
 	pages := subjectPages(query, rerankResults(query, results))
 	whoDid := reWhoDid.MatchString(strings.ToLower(strings.TrimSpace(query)))
 	if whoDid {
@@ -951,14 +958,21 @@ func requirePredicate(query, title string, ranked []cand) []cand {
 	if isWhere(query) && locOnly(pred) {
 		var loc []cand
 		for _, c := range ranked {
-			if reWhere.MatchString(c.text) {
+			if reWhere.MatchString(c.text) && hasSubject(query, c) {
 				loc = append(loc, c)
 			}
 		}
 		return loc
 	}
 	var out []cand
+	where := isWhere(query)
 	for _, c := range ranked {
+		if where && !reWhere.MatchString(c.text) {
+			continue // a "where" question is answered by a sentence with a place, not a date
+		}
+		if !hasSubject(query, c) {
+			continue // right words, wrong entity: the named subject must appear in the sentence or its page title
+		}
 		if needNum && !hasQuantity(c.text, query) {
 			continue // a quantity question is answered by a sentence with a real number (not an ordinal, century or year)
 		}
@@ -1301,3 +1315,83 @@ func sourceBonus(u string) float64 {
 	}
 	return 0
 }
+
+var reNamedSubject = regexp.MustCompile(`\b([A-Z][\p{L}'-]+(?:\s+(?:(?:of|the|de|von|van|and|la|le)\s+)*[A-Z][\p{L}'-]+)+)`)
+
+// entityFilter protects against right-words-wrong-entity answers: when the question names a multi-word subject
+// ("Albert Einstein"), a page whose title is that name plus extra words ("Hans Albert Einstein", "Replicas of the
+// Statue of Liberty") is about a related entity, so it is dropped. Returns the kept results and how many were dropped.
+func entityFilter(query string, rs []SearchResult) ([]SearchResult, int) {
+	q := strings.TrimSpace(query)
+	if i := strings.IndexByte(q, ' '); i > 0 {
+		q = q[i+1:] // the first word is capitalised only because it starts the sentence
+	}
+	m := reNamedSubject.FindStringSubmatch(q)
+	if m == nil {
+		return rs, 0
+	}
+	subj := terms(m[1])
+	if len(subj) < 2 {
+		return rs, 0
+	}
+	var kept []SearchResult
+	dropped := 0
+	for _, r := range rs {
+		tt := terms(reParen.ReplaceAllString(cleanTitle(r.Title), " ")) // "(album)" is a disambiguator, not extra name words
+		have := map[string]bool{}
+		for _, t := range tt {
+			have[t] = true
+		}
+		all := true
+		for _, t := range subj {
+			if !have[t] {
+				all = false
+			}
+		}
+		if all && len(tt) > len(subj) {
+			dropped++
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return kept, dropped
+}
+
+// namedSubject returns the stemmed terms of a multi-word capitalised subject in the question ("Albert Einstein").
+func namedSubject(query string) []string {
+	q := strings.TrimSpace(query)
+	if i := strings.IndexByte(q, ' '); i > 0 {
+		q = q[i+1:]
+	}
+	m := reNamedSubject.FindStringSubmatch(q)
+	if m == nil {
+		return nil
+	}
+	if s := terms(m[1]); len(s) >= 2 {
+		return s
+	}
+	return nil
+}
+
+// hasSubject: every term of the named subject must be in the sentence or in the title of the page it came from.
+func hasSubject(query string, c cand) bool {
+	subj := namedSubject(query)
+	if len(subj) == 0 {
+		return true
+	}
+	in := func(s string) bool {
+		have := map[string]bool{}
+		for _, t := range terms(s) {
+			have[t] = true
+		}
+		for _, t := range subj {
+			if !have[t] {
+				return false
+			}
+		}
+		return true
+	}
+	return in(c.text) || in(c.ctx) // the sentence names the subject itself, or it comes from the page about it
+}
+
+var reParen = regexp.MustCompile(`\([^)]*\)`)

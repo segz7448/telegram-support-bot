@@ -302,6 +302,11 @@ func parseSeries(body string) (title string, labels []string, vals []float64, er
 			vals = append(vals, v)
 		}
 	}
+	for _, v := range vals {
+		if math.IsInf(v, 0) || math.IsNaN(v) || math.Abs(v) > 1e12 {
+			return "", nil, nil, "A value is too large to chart safely (limit 1e12)."
+		}
+	}
 	if len(vals) < 2 {
 		return "", nil, nil, "I need at least 2 values. Example: bar chart: Mon=5, Tue=8, Wed=3 title: Sales"
 	}

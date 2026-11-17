@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -14,14 +15,36 @@ import (
 // Compute answers maths, statistics, percentage, date and time-zone questions with fixed rules. No language model:
 // it only fires on patterns with real numbers/dates in them, and otherwise returns ok=false.
 func Compute(text string, now time.Time) (string, bool) {
+	now = now.In(LocalZone())
 	t := strings.TrimSpace(text)
 	low := strings.ToLower(t)
+	if r, ok := RunScript(t); ok {
+		return r, true
+	}
 	for _, f := range []func(string, string, time.Time) (string, bool){computeStats, computePercent, computeDates, computeZones} {
 		if r, ok := f(t, low, now); ok {
 			return r, true
 		}
 	}
 	return "", false
+}
+
+// LocalZone is the zone used for "today" in date answers: TG_TIMEZONE (an IANA name such as Africa/Lagos), default UTC.
+// Every date answer says which zone it used, so a default is never silent.
+func LocalZone() *time.Location {
+	if n := os.Getenv("TG_TIMEZONE"); n != "" {
+		if l, err := time.LoadLocation(n); err == nil {
+			return l
+		}
+	}
+	return time.UTC
+}
+
+func zoneNote(now time.Time) string {
+	if os.Getenv("TG_TIMEZONE") == "" || LocalZone() == time.UTC {
+		return " Today's date here is the UTC date (the owner can set a local zone with TG_TIMEZONE)."
+	}
+	return " Today's date uses " + LocalZone().String() + "."
 }
 
 var reNumC = regexp.MustCompile(`-?\d+(?:\.\d+)?`)
@@ -47,7 +70,10 @@ func computeStats(t, low string, _ time.Time) (string, bool) {
 	}
 	var xs []float64
 	for _, s := range reNumC.FindAllString(rest, -1) {
-		v, _ := strconv.ParseFloat(s, 64)
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil || math.IsInf(v, 0) || math.IsNaN(v) || math.Abs(v) > 1e15 {
+			return "One of those numbers is too large to handle safely (limit 1e15), so I won't calculate it.", true
+		}
 		xs = append(xs, v)
 	}
 	if len(xs) < 1 {
@@ -62,6 +88,9 @@ func computeStats(t, low string, _ time.Time) (string, bool) {
 	sum := 0.0
 	for _, x := range xs {
 		sum += x
+	}
+	if math.IsInf(sum, 0) || math.IsNaN(sum) {
+		return "That total overflows, so I won't give a wrong number.", true
 	}
 	mean := sum / n
 	median := sorted[len(sorted)/2]
@@ -104,7 +133,7 @@ func computeStats(t, low string, _ time.Time) (string, bool) {
 	}
 	switch strings.ToLower(m[1]) {
 	case "mean", "average":
-		return "Mean of " + fmt.Sprint(len(xs)) + " numbers: " + fnum(mean), true
+		return "Mean (arithmetic average) of " + fmt.Sprint(len(xs)) + " numbers: " + fnum(mean), true
 	case "median":
 		return "Median: " + fnum(median), true
 	case "mode":
@@ -276,14 +305,14 @@ func computeDates(t, low string, now time.Time) (string, bool) {
 		n := int(d.Sub(today).Hours() / 24)
 		if strings.EqualFold(m[1], "since") || strings.EqualFold(m[1], "from") {
 			if n > 0 {
-				return fmt.Sprintf("%s is in the future: %s from today (UTC date %s).", dayStr(d), plural(n, "day"), today.Format("2 Jan 2006")), true
+				return fmt.Sprintf("%s is in the future: %s from today (today %s).%s", dayStr(d), plural(n, "day"), today.Format("2 Jan 2006"), zoneNote(now)), true
 			}
-			return fmt.Sprintf("%s since %s (UTC date today %s).", plural(-n, "day"), dayStr(d), today.Format("2 Jan 2006")), true
+			return fmt.Sprintf("%s since %s (today %s).%s", plural(-n, "day"), dayStr(d), today.Format("2 Jan 2006"), zoneNote(now)), true
 		}
 		if n < 0 {
-			return fmt.Sprintf("%s was %s ago (UTC date today %s).", dayStr(d), plural(-n, "day"), today.Format("2 Jan 2006")), true
+			return fmt.Sprintf("%s was %s ago (today %s).%s", dayStr(d), plural(-n, "day"), today.Format("2 Jan 2006"), zoneNote(now)), true
 		}
-		return fmt.Sprintf("%s until %s (%d weeks and %d days). UTC date today: %s.", plural(n, "day"), dayStr(d), n/7, n%7, today.Format("2 Jan 2006")), true
+		return fmt.Sprintf("%s until %s (%d weeks and %d days). Today: %s.%s", plural(n, "day"), dayStr(d), n/7, n%7, today.Format("2 Jan 2006"), zoneNote(now)), true
 	}
 	if m := reWhatDay.FindStringSubmatch(t); m != nil {
 		d, ok, _ := parseDate(m[1], now)
@@ -307,7 +336,7 @@ func computeDates(t, low string, now time.Time) (string, bool) {
 				return "", false
 			}
 		}
-		return dayStr(b.AddDate(0, 0, n)), true
+		return dayStr(b.AddDate(0, 0, n)) + "." + zoneNote(now), true
 	}
 	if m := reOffset.FindStringSubmatch(t); m != nil {
 		return off(m[1], m[2], m[3], m[4])
@@ -316,7 +345,7 @@ func computeDates(t, low string, now time.Time) (string, bool) {
 		return off(m[1], m[2], m[3], m[4])
 	}
 	if regexp.MustCompile(`(?i)^(?:what(?:'s| is) )?(?:today'?s date|the date(?: today)?|today'?s date today|what day is it(?: today)?|what is today|date today)\s*[?.]?$`).MatchString(t) {
-		return "Today is " + dayStr(today) + " (UTC date).", true
+		return "Today is " + dayStr(today) + "." + zoneNote(now), true
 	}
 	return "", false
 }
@@ -380,6 +409,9 @@ func computeZones(t, low string, now time.Time) (string, bool) {
 			min, _ = strconv.Atoi(m[2])
 		}
 		ap := strings.ToLower(m[3])
+		if ap == "" && h >= 1 && h <= 12 && !strings.HasPrefix(m[1], "0") {
+			return fmt.Sprintf("Did you mean %d am or %d pm? Say it like \"convert %d pm %s to %s\" or use 24-hour time like 15:00.", h, h, h, strings.TrimSpace(m[4]), strings.TrimSpace(m[5])), true
+		}
 		if ap == "pm" && h < 12 {
 			h += 12
 		}
@@ -390,6 +422,9 @@ func computeZones(t, low string, now time.Time) (string, bool) {
 			return "", false
 		}
 		src := time.Date(now.In(from).Year(), now.In(from).Month(), now.In(from).Day(), h, min, 0, 0, from)
+		if src.Hour() != h {
+			return fmt.Sprintf("%02d:%02d does not exist in %s today (clocks skip forward that day). Pick another time.", h, min, strings.TrimSpace(m[4])), true
+		}
 		dst := src.In(to)
 		extra := ""
 		if dst.YearDay() != src.YearDay() || dst.Year() != src.Year() {
@@ -399,7 +434,7 @@ func computeZones(t, low string, now time.Time) (string, bool) {
 				extra = " (previous day)"
 			}
 		}
-		return fmt.Sprintf("%s %s (%s) is %s %s (%s)%s, using today's UTC-based date and current zone rules.", src.Format("15:04"), strings.TrimSpace(m[4]), fid, dst.Format("15:04"), strings.TrimSpace(m[5]), tid, extra), true
+		return fmt.Sprintf("%s %s (%s) is %s %s (%s)%s, using today's date in the source zone (%s) and that day's daylight-saving rules.", src.Format("15:04"), strings.TrimSpace(m[4]), fid, dst.Format("15:04"), strings.TrimSpace(m[5]), tid, extra, src.Format("2 Jan 2006")), true
 	}
 	return "", false
 }
