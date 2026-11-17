@@ -123,3 +123,58 @@ func TestPrivateTargetNeverFetched(t *testing.T) {
 		t.Fatalf("private host was requested: %v", pf.calls)
 	}
 }
+
+const eiffel = `<html><head><title>Eiffel Tower - Wikipedia</title></head><body><p>The Eiffel Tower is a wrought-iron lattice tower on the Champ de Mars in Paris, France. It is named after the engineer Gustave Eiffel, whose company designed and built the tower from 1887 to 1889.</p>
+<p>The tower was the world's tallest man-made structure until 1930 and it receives millions of visitors every year from all over the world.</p>
+<ol class="references"><li>↑ "Eiffel Tower". Archived from the original on 12 May 2019. Retrieved 3 May 2019.</li><li>^ Smith, J. (2001). Towers. ISBN 978-0-00-000000-0.</li></ol></body></html>`
+
+const towers = `<html><head><title>List of towers</title></head><body><p>Built in 1891 as an observation tower with octagonal plan; now also used for communications and tourism in the region.</p>
+<p>Built in 1905, it is one of the world's tallest observation towers built of wood and it stands in a small park near the city.</p></body></html>`
+
+func TestEiffelDateNoUnrelatedOrFootnotes(t *testing.T) {
+	s := &fakeS{res: []SearchResult{{Title: "Eiffel Tower - Wikipedia", URL: "https://example.com/eiffel", Snippet: "x"}, {Title: "List of towers", URL: "https://other.example.org/t", Snippet: "y"}}}
+	c, _, _ := newTestChat(s, map[string]PageResult{"https://example.com/eiffel": page(eiffel), "https://other.example.org/t": page(towers)},
+		map[string]string{"example.com": "93.184.216.34", "other.example.org": "93.184.216.40"})
+	got := c.Reply("1", "when was the Eiffel Tower built?")
+	if !strings.Contains(got, "1887 to 1889") {
+		t.Fatalf("missing answer: %q", got)
+	}
+	for _, bad := range []string{"1891", "1905", "Retrieved", "Archived", "ISBN", "↑", "^"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("noise %q in %q", bad, got)
+		}
+	}
+}
+
+const kili = `<html><head><title>Mount Kilimanjaro - Wikipedia</title></head><body><p>Mount Kilimanjaro is a large dormant stratovolcano in Tanzania [ 3 ] . It is the highest mountain in Africa and the highest free-standing mountain above sea level in the world, at 5,895 m (19,341 ft) above sea level.</p>
+<p>Multiple species are endemic to Mount Kilimanjaro, including the giant groundsel Dendrosenecio kilimanjari. A map of the Kibo cone was published in 1964 based on aerial photography conducted in 1962.</p>
+<p>Map credit Mount Kilimanjaro Location within Tanzania Show map of Tanzania</p></body></html>`
+
+func TestKilimanjaroHeightUsesPronounSentenceAndNoNoise(t *testing.T) {
+	s := &fakeS{res: []SearchResult{{Title: "Mount Kilimanjaro - Wikipedia", URL: "https://example.com/k", Snippet: "x"}}}
+	c, _, _ := newTestChat(s, map[string]PageResult{"https://example.com/k": page(kili)}, map[string]string{"example.com": "93.184.216.34"})
+	got := c.Reply("1", "how tall is Mount Kilimanjaro")
+	if !strings.Contains(got, "5,895 m") {
+		t.Fatalf("missing height: %q", got)
+	}
+	for _, bad := range []string{"Multiple species", "Map credit", "[ 3 ]", "[3]"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("noise %q in %q", bad, got)
+		}
+	}
+}
+
+func TestAbstainsOnAmbiguousAndOnWeakEvidence(t *testing.T) {
+	s := &fakeS{res: []SearchResult{{Title: "Mercury (disambiguation)", URL: "https://example.com/m", Snippet: "Mercury may refer to: the planet, the element, a Roman god."}}}
+	c, pf, _ := newTestChat(s, map[string]PageResult{"https://example.com/m": page("<p>Mercury may refer to many things including a planet, a chemical element and a deity of the Romans.</p>")}, map[string]string{"example.com": "93.184.216.34"})
+	got := c.Reply("1", "tell me about mercury")
+	if !strings.Contains(got, "several things") {
+		t.Fatalf("no disambiguation: %q", got)
+	}
+	_ = pf
+	s2 := &fakeS{res: []SearchResult{{Title: "Cats", URL: "https://example.com/c", Snippet: "Cats are small carnivorous mammals kept as pets by people around the world."}}}
+	c2, _, _ := newTestChat(s2, nil, map[string]string{"example.com": "93.184.216.34"})
+	if got := c2.Reply("1", "who is the mayor of Lagos in 1990"); !strings.Contains(got, "won't guess") {
+		t.Fatalf("should abstain: %q", got)
+	}
+}

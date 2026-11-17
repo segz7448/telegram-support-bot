@@ -134,7 +134,29 @@ func (t *TavilySearch) Search(q string) ([]SearchResult, error) {
 type WikiSearch struct{ T *Tools }
 
 func (w WikiSearch) Search(q string) ([]SearchResult, error) {
-	u := w.T.WikiAPI + "?action=query&generator=search&gsrlimit=5&prop=extracts%7Cinfo&exintro=1&explaintext=1&exchars=700&inprop=url&redirects=1&format=json&formatversion=2&gsrsearch=" + url.QueryEscape(subjectQuery(q))
+	a, err1 := w.search(subjectQuery(q))
+	if sq := strings.Join(toks(q), " "); sq != subjectQuery(q) {
+		b, err2 := w.search(q)
+		if err1 != nil && err2 != nil {
+			return nil, err1
+		}
+		seen := map[string]bool{}
+		var out []SearchResult
+		for i := 0; i < len(a) || i < len(b); i++ {
+			for _, l := range [][]SearchResult{a, b} {
+				if i < len(l) && !seen[l[i].URL] {
+					seen[l[i].URL] = true
+					out = append(out, l[i])
+				}
+			}
+		}
+		return out, nil
+	}
+	return a, err1
+}
+
+func (w WikiSearch) search(q string) ([]SearchResult, error) {
+	u := w.T.WikiAPI + "?action=query&generator=search&gsrlimit=5&prop=extracts%7Cinfo&exintro=1&explaintext=1&exchars=700&inprop=url&redirects=1&format=json&formatversion=2&gsrsearch=" + url.QueryEscape(q)
 	b, st, err := w.T.get(u, 15)
 	if err != nil || st != 200 {
 		return nil, fmt.Errorf("wikipedia unreachable")
@@ -403,7 +425,7 @@ func sentences(text string) []string {
 	}
 	var keep []string
 	for _, s := range out {
-		if n := len([]rune(s)); n >= 30 && n <= 450 && !reJunk.MatchString(s) {
+		if goodSentence(s) {
 			keep = append(keep, s)
 		}
 	}
@@ -411,6 +433,7 @@ func sentences(text string) []string {
 }
 
 type cand struct {
+	ctx   string // page title: used to resolve a leading pronoun ("It is the highest...")
 	text  string
 	src   int
 	pos   int
@@ -450,6 +473,9 @@ func rank(query string, cands []cand) []cand {
 	for i, c := range cands {
 		tf[i] = map[string]int{}
 		ts := terms(c.text)
+		if reProStart.MatchString(c.text) {
+			ts = append(ts, terms(c.ctx)...)
+		}
 		total += len(ts)
 		for _, t := range ts {
 			tf[i][t]++
@@ -470,6 +496,7 @@ func rank(query string, cands []cand) []cand {
 		}
 		var sc float64
 		hit := 0
+		covered := map[string]bool{}
 		for qi, t := range q {
 			f := float64(tf[i][t])
 			if f == 0 {
@@ -477,9 +504,21 @@ func rank(query string, cands []cand) []cand {
 			}
 			if qi < nOrig {
 				hit++
+				covered[t] = true
 			}
 			idf := math.Log(1 + (N-float64(df[t])+0.5)/(float64(df[t])+0.5))
 			sc += idf * (f * 2.2) / (f + 1.2*(0.25+0.75*float64(dl)/avg))
+		}
+		for _, t := range q[:nOrig] { // a synonym present counts as covering the term
+			if covered[t] {
+				continue
+			}
+			for _, x := range synonyms[t] {
+				if tf[i][x] > 0 {
+					hit++
+					break
+				}
+			}
 		}
 		cands[i].cover = float64(hit) / float64(nOrig)
 		cands[i].score = sc*(0.5+cands[i].cover) + 0.3/float64(1+cands[i].pos)
@@ -489,6 +528,9 @@ func rank(query string, cands []cand) []cand {
 		}
 		if isQty && reDigit.MatchString(cands[i].text) {
 			cands[i].score += 0.8
+			if reUnit.MatchString(cands[i].text) {
+				cands[i].score += 0.8
+			}
 		}
 	}
 	sort.SliceStable(cands, func(a, b int) bool { return cands[a].score > cands[b].score })
@@ -512,13 +554,15 @@ func hostOf(u string) string {
 }
 
 var (
-	reCite  = regexp.MustCompile(`\[\s*(\d+|[a-z]|citation needed|note \d+)\s*\]`)
-	reSpPun = regexp.MustCompile(`\s+([,.;:!?)])`)
-	reOpen  = regexp.MustCompile(`\(\s+`)
-	reJunk  = regexp.MustCompile(`(?i)map credit|show map|location within|click here|cookie|subscribe|sign up|all rights reserved|privacy policy`)
-	reDigit = regexp.MustCompile(`\d`)
-	reDef   = regexp.MustCompile(`^(who|what)\s+(is|are|was|were)\b|^(define|explain)\b`)
-	reQty   = regexp.MustCompile(`\b(how (many|tall|long|far|old|much|big|high|deep)|population|when|year|price|cost|height|age)\b`)
+	reCite     = regexp.MustCompile(`\[\s*(\d+|[a-z]|citation needed|note \d+)\s*\]`)
+	reSpPun    = regexp.MustCompile(`\s+([,.;:!?)])`)
+	reOpen     = regexp.MustCompile(`\(\s+`)
+	reJunk     = regexp.MustCompile(`(?i)map credit|show map|location within|click here|cookie|subscribe|sign up|all rights reserved|privacy policy`)
+	reDigit    = regexp.MustCompile(`\d`)
+	reDef      = regexp.MustCompile(`^(who|what)\s+(is|are|was|were)\s+(an?\s+)?[^\s]+(\s+[^\s]+){0,2}\??$|^(define|explain)\b`)
+	reProStart = regexp.MustCompile(`^(It|He|She|They|Its|His|Her|Their)\b`)
+	reUnit     = regexp.MustCompile(`\d[\d,.]*\s*(m|km|ft|cm|mm|kg|metres|meters|kilometres|miles|feet|million|billion|%)\b`)
+	reQty      = regexp.MustCompile(`\b(how (many|tall|long|far|old|much|big|high|deep)|population|when|year|price|cost|height|age)\b`)
 )
 
 func noLinks(s string) string {
@@ -628,7 +672,7 @@ func (c *Chat) Reply(chat, text string) string {
 		idx := len(srcs)
 		srcs = append(srcs, r)
 		for p, s := range ss {
-			cands = append(cands, cand{text: noLinks(s), src: idx, pos: p})
+			cands = append(cands, cand{text: noLinks(s), src: idx, pos: p, ctx: cleanTitle(r.Title)})
 		}
 		if idx == 0 {
 			if t := cleanTitle(r.Title); t != "" {
@@ -637,7 +681,17 @@ func (c *Chat) Reply(chat, text string) string {
 		}
 	}
 	ranked := rank(query, cands)
-	if len(ranked) == 0 || ranked[0].cover < 0.34 {
+	minCover := 0.34
+	if nt := len(uniqTerms(query)); nt >= 3 {
+		minCover = 0.6
+	} else if nt == 2 {
+		minCover = 0.5
+	}
+	if len(ranked) > 0 && ambiguousTop(results) {
+		st.rest = nil
+		return "That could mean several things (" + cleanTitle(results[0].Title) + " has more than one meaning). Tell me which one you mean, e.g. add a few words of detail. " + results[0].URL
+	}
+	if len(ranked) == 0 || ranked[0].cover < minCover {
 		st.rest = nil
 		msg := "I found pages but nothing in them that clearly answers that, so I won't guess."
 		if len(srcs) > 0 {
@@ -664,7 +718,7 @@ func (c *Chat) Reply(chat, text string) string {
 		if len(picked) >= 3 {
 			break
 		}
-		if used[cd.text] || cd.cover < 0.34 {
+		if used[cd.text] || cd.cover < minCover || cd.score < 0.55*ranked[0].score {
 			continue
 		}
 		used[cd.text] = true
@@ -672,7 +726,7 @@ func (c *Chat) Reply(chat, text string) string {
 	}
 	var rest []string
 	for _, cd := range ranked {
-		if !used[cd.text] && cd.cover >= 0.34 && len(rest) < 6 {
+		if !used[cd.text] && cd.cover >= minCover && cd.score >= 0.4*ranked[0].score && len(rest) < 6 {
 			rest = append(rest, cd.text)
 		}
 	}
@@ -723,9 +777,68 @@ func subjectQuery(q string) string {
 }
 
 var synonyms = map[string][]string{
-	"tall": {"height", "metre", "meter", "feet", "high"}, "high": {"height", "metre", "feet", "elevation"},
+	"tall": {"height", "metre", "meter", "feet", "high", "highest", "tallest"}, "high": {"height", "metre", "feet", "elevation", "highest"},
 	"population": {"inhabitant", "census", "resident", "people"}, "old": {"age", "born", "year"},
 	"far": {"distance", "kilometre", "mile", "km"}, "long": {"length", "kilometre", "mile", "year"},
 	"big": {"size", "area", "square"}, "cost": {"price", "dollar", "usd"}, "price": {"cost", "dollar", "usd"},
-	"die": {"death", "died"}, "born": {"birth"}, "found": {"founded", "established"}, "invent": {"inventor", "invented"},
+	"die": {"death", "died"}, "built": {"construct", "completed", "opened", "erected"}, "build": {"construct", "completed", "opened"}, "when": {}, "die2": nil, "born": {"birth"}, "found": {"founded", "established"}, "invent": {"inventor", "invented"},
+}
+
+var reRefNoise = regexp.MustCompile(`(?i)↑|\^|archived (from|at|on)|retrieved \d|wayback|\bISBN\b|\bdoi\b|\bS2CID\b|\bPMID\b|\bpp?\. ?\d|^\W*(see also|references|external links)\b|^["“]`)
+
+// goodSentence keeps prose and drops footnotes, reference-list lines, list fragments and page chrome.
+func goodSentence(s string) bool {
+	n := len([]rune(s))
+	if n < 40 || n > 450 || reJunk.MatchString(s) || reRefNoise.MatchString(s) {
+		return false
+	}
+	words := strings.Fields(s)
+	if len(words) < 7 {
+		return false
+	}
+	caps := 0
+	for _, w := range words {
+		if r := []rune(w)[0]; r >= 'A' && r <= 'Z' {
+			caps++
+		}
+	}
+	if float64(caps)/float64(len(words)) > 0.7 { // headings and title lists, not prose
+		return false
+	}
+	first := []rune(s)[0]
+	if !(first >= 'A' && first <= 'Z' || first >= '0' && first <= '9' || first > 127) {
+		return false
+	}
+	end := []rune(s)[n-1]
+	if end != '.' && end != '!' && end != '?' && end != '"' && end != ')' {
+		return false
+	}
+	letters := 0
+	for _, r := range s {
+		if r >= 'A' && r <= 'z' || r > 127 {
+			letters++
+		}
+	}
+	return float64(letters)/float64(n) > 0.6
+}
+
+func uniqTerms(q string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range terms(q) {
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// ambiguousTop: the top result is a disambiguation page ("X may refer to"), so any single answer would be a guess.
+func ambiguousTop(rs []SearchResult) bool {
+	if len(rs) == 0 {
+		return false
+	}
+	t := strings.ToLower(rs[0].Title + " " + rs[0].Snippet)
+	return strings.Contains(t, "(disambiguation)") || strings.Contains(t, " may refer to") || strings.Contains(t, " commonly refers to")
 }

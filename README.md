@@ -87,3 +87,9 @@ No pretrained model, local or hosted, is used. Chat is rules plus retrieval, ena
   the IP is pinned, redirects (max 3) re-validated, html/text only. Page text is untrusted: nothing executes or follows it, links are stripped.
 - Privacy: your words go to the search service, DoH resolvers and the sites read.
 - Limits: extractive answers can be off-topic or truncated; quality is lower than a language model's.
+
+### Phone self-test for the chat path (no token, no Telegram, no polling, about 1-2 minutes)
+`./tgbot-arm64 --selftest-chat` runs the real matching, follow-ups, DoH + pinned-curl page fetch, extraction and ranking against live
+Wikipedia, and checks that private/IP-literal targets are refused. Prints OK/FAIL lines and exits non-zero on failure.
+Search is Wikipedia-only without a search key: encyclopedia questions work; news, prices and local queries do not (no general web search yet).
+Privacy note for any hosted search API: queries leave the phone. Tavily's Platform Terms license submitted inputs to Tavily for improving its services and AI training.
