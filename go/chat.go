@@ -697,6 +697,7 @@ func (c *Chat) Reply(chat, text string) string {
 			return r
 		}
 	}
+	text = normWW(text)
 	st := c.state(chat)
 	low := strings.ToLower(text)
 	if _, r, ok := smallTalk(low); ok {

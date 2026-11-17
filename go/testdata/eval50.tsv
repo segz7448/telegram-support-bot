@@ -12,7 +12,7 @@ who was Ada Lovelace	mathematician
 who was Nelson Mandela	(president|anti-apartheid)
 who was Marie Curie	(physicist|chemist)
 what is photosynthesis	(light|energy|plants)
-what is the speed of light	(299,792|299 792|3\.0)
+what is the speed of light	(299,792|299 792|186,282|186 282|m\/s|miles per second)
 how tall is Mount Everest	(8,8[0-9]{2}|29,0[0-9]{2})
 how tall is Mount Kilimanjaro	(5,895|19,341)
 how tall is the Eiffel Tower	(330|1,083|324)
@@ -29,7 +29,7 @@ when was the Declaration of Independence signed	(1776|July|August)
 when did the Berlin Wall fall	1989
 when was the printing press invented	(14[0-9]{2}|15th century)
 where is Mount Kilimanjaro	Tanzania
-where is the Great Barrier Reef	(Australia|Queensland)
+where is the Great Barrier Reef	(Australia|Queensland|Torres Strait|Coral Sea)
 where was Marie Curie born	Warsaw
 where was Albert Einstein born	Ulm
 where is Machu Picchu	Peru
