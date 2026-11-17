@@ -254,6 +254,7 @@ type Chat struct {
 	Know   *Knowledge    // owner-taught facts (nil = off)
 	Quiz   *Quiz         // quiz over the taught facts (nil = off)
 	Rel    *Releases     // owner's GitHub release watches (nil = off)
+	Feeds  *Feeds        // owner-approved RSS/Atom feeds (nil = off)
 	GH     GitHubGetter  // keyless public GitHub repository search (nil = off)
 	News   *News         // keyless news headlines and owner daily digest (nil = off)
 	Rem    *Reminders    // in-bot reminders (nil = off)
@@ -713,6 +714,11 @@ func (c *Chat) Reply(chat, text string) string {
 	}
 	if c.Notes != nil {
 		if r, ok := c.Notes.Handle(chat, text); ok {
+			return r
+		}
+	}
+	if c.Feeds != nil {
+		if r, ok := c.Feeds.Handle(chat, text); ok {
 			return r
 		}
 	}
