@@ -41,6 +41,13 @@ func main() {
 		fmt.Println("games selftest passed")
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "--selftest-news-github" {
+		if !SelfTestNewsGitHub(dir, func(s string) { fmt.Fprintln(os.Stderr, s) }) {
+			os.Exit(1)
+		}
+		fmt.Println("news/github selftest passed (MOCKED transport)")
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--selftest-chat" {
 		if !SelfTestChat(tools, curlPath, func(s string) { fmt.Fprintln(os.Stderr, s) }) {
 			os.Exit(1)
