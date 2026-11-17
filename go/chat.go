@@ -265,6 +265,9 @@ func toks(s string) []string {
 func terms(s string) []string {
 	var out []string
 	for _, w := range toks(s) {
+		if r, ok := roman[w]; ok {
+			w = r
+		}
 		if !stopW[w] {
 			out = append(out, stemW(w))
 		}
@@ -411,7 +414,7 @@ var sentSplit = regexp.MustCompile(`(?:[.!?])\s+(?:[A-Z0-9"“(])`)
 func sentences(text string) []string {
 	var out []string
 	for _, para := range strings.Split(text, "\n") {
-		para = strings.TrimSpace(para)
+		para = noLinks(strings.TrimSpace(para)) // drop citation markers first so they cannot hide a sentence boundary
 		if para == "" {
 			continue
 		}
@@ -508,7 +511,11 @@ func rank(query string, cands []cand) []cand {
 				covered[t] = true
 			}
 			idf := math.Log(1 + (N-float64(df[t])+0.5)/(float64(df[t])+0.5))
-			sc += idf * (f * 2.2) / (f + 1.2*(0.25+0.75*float64(dl)/avg))
+			w := 1.0
+			if qi >= nOrig {
+				w = 0.5 // synonyms count for less than the asker's own words
+			}
+			sc += w * idf * (f * 2.2) / (f + 1.2*(0.25+0.75*float64(dl)/avg))
 		}
 		for _, t := range q[:nOrig] { // a synonym present counts as covering the term
 			if covered[t] {
@@ -524,8 +531,22 @@ func rank(query string, cands []cand) []cand {
 		cands[i].cover = float64(hit) / float64(nOrig)
 		cands[i].score = sc*(0.5+cands[i].cover) + 0.3/float64(1+cands[i].pos)
 		cands[i].score += 1.2 / float64(1+cands[i].src) // earlier (better-matching) sources first
+		if !reProStart.MatchString(cands[i].text) && cands[i].ctx != "" {
+			full := true
+			for _, t := range terms(cands[i].ctx) {
+				if tf[i][t] == 0 {
+					full = false
+				}
+			}
+			if full {
+				cands[i].score += 0.6 // names the subject explicitly, not via "he/it"
+			}
+		}
 		if isDef && cands[i].pos < 3 {
 			cands[i].score += 1.5 / float64(1+cands[i].pos)
+		}
+		if isQty && reYear.MatchString(lq) && reYear4.MatchString(cands[i].text) {
+			cands[i].score += 1.0
 		}
 		if isQty && reDigit.MatchString(cands[i].text) {
 			cands[i].score += 0.8
@@ -559,11 +580,13 @@ var (
 	reSpPun    = regexp.MustCompile(`\s+([,.;:!?)])`)
 	reOpen     = regexp.MustCompile(`\(\s+`)
 	reJunk     = regexp.MustCompile(`(?i)map credit|show map|location within|click here|cookie|subscribe|sign up|all rights reserved|privacy policy`)
+	reYear4    = regexp.MustCompile(`\b(1[0-9]{3}|20[0-9]{2})\b`)
+	reYear     = regexp.MustCompile(`\b(when|year)\b`)
 	reDigit    = regexp.MustCompile(`\d`)
 	reDef      = regexp.MustCompile(`^(who|what)\s+(is|are|was|were)\s+(an?\s+)?[^\s]+(\s+[^\s]+){0,2}\??$|^(define|explain)\b`)
 	reProStart = regexp.MustCompile(`^(It|He|She|They|Its|His|Her|Their)\b`)
 	reUnit     = regexp.MustCompile(`\d[\d,.]*\s*(m|km|ft|cm|mm|kg|metres|meters|kilometres|miles|feet|million|billion|%)\b`)
-	reQty      = regexp.MustCompile(`\b(how (many|tall|long|far|old|much|big|high|deep)|population|when|year|price|cost|height|age)\b`)
+	reQty      = regexp.MustCompile(`\b(how (many|tall|long|far|old|much|big|high|deep)|distance|away|population|when|year|price|cost|height|age)\b`)
 )
 
 func noLinks(s string) string {
@@ -649,51 +672,49 @@ func (c *Chat) Reply(chat, text string) string {
 	if len(results) == 0 {
 		return "I couldn't find web results for that (or the connection is slow). I don't guess facts, so try rewording or ask again in a minute."
 	}
-	var cands []cand
-	var srcs []SearchResult
-	for _, r := range rerankResults(query, results) {
-		if len(srcs) >= 3 {
-			break
-		}
-		body := ""
-		if c.Pages != nil && c.Res != nil && c.Now().Before(deadline) {
-			if _, b, err := FetchPage(c.Pages, c.Res, r.URL); err == nil {
-				body = ExtractText(b, 8000).Text
-			} else {
-				c.logf("page fetch failed")
-			}
-		}
-		if body == "" {
-			body = Sanitize(trunc(r.Snippet, 700))
-		}
-		ss := sentences(body)
-		if len(ss) == 0 {
-			continue
-		}
-		idx := len(srcs)
-		srcs = append(srcs, r)
-		for p, s := range ss {
-			cands = append(cands, cand{text: noLinks(s), src: idx, pos: p, ctx: cleanTitle(r.Title)})
-		}
-		if idx == 0 {
-			if t := cleanTitle(r.Title); t != "" {
-				st.topic = t
-			}
-		}
-	}
-	ranked := rank(query, cands)
-	ranked = requirePredicate(query, cleanTitleOf(srcs), ranked)
-	minCover := 0.34
-	if nt := len(uniqTerms(query)); nt >= 3 {
-		minCover = 0.6
-	} else if nt == 2 {
-		minCover = 0.5
-	}
-	if len(ranked) > 0 && ambiguousTop(results) {
+	if ambiguousTop(results) {
 		st.rest = nil
 		return "That could mean several things (" + cleanTitle(results[0].Title) + " has more than one meaning). Tell me which one you mean, e.g. add a few words of detail. " + results[0].URL
 	}
-	if len(ranked) == 0 || ranked[0].cover < minCover {
+	pages := subjectPages(query, rerankResults(query, results))
+	if len(pages) > 3 {
+		pages = pages[:3]
+	}
+	// Stage 1 (no extra requests): the search results' own intro text. Stage 2: fetch pages one at a time, stopping
+	// at the first page that supports an answer. This keeps slow-phone latency and DoH/fetch requests low.
+	var cands []cand
+	var srcs []SearchResult
+	for i, r := range pages {
+		ss := sentences(Sanitize(trunc(r.Snippet, 700)))
+		srcs = append(srcs, r)
+		for p, x := range ss {
+			cands = append(cands, cand{text: x, src: i, pos: p, ctx: cleanTitle(r.Title)})
+		}
+	}
+	if t := cleanTitleOf(srcs); t != "" {
+		st.topic = t
+	}
+	picked, rest, ok := evaluate(query, results, srcs, cands)
+	if !reDef.MatchString(strings.ToLower(query)) {
+		ok = false // facts live deeper in the page than the intro: always read the best page (intro text stays as candidates)
+	}
+	fetched := 0
+	for i := 0; !ok && i < len(pages) && fetched < 2; i++ {
+		if c.Pages == nil || c.Res == nil || !c.Now().Before(deadline) {
+			break
+		}
+		fetched++
+		_, b, err := FetchPage(c.Pages, c.Res, pages[i].URL)
+		if err != nil {
+			c.logf("page fetch failed")
+			continue
+		}
+		for p, x := range sentences(ExtractText(b, 8000).Text) {
+			cands = append(cands, cand{text: x, src: i, pos: p + 100, ctx: cleanTitle(pages[i].Title)})
+		}
+		picked, rest, ok = evaluate(query, results, srcs, cands)
+	}
+	if !ok {
 		st.rest = nil
 		msg := "I found pages but nothing in them that clearly answers that, so I won't guess."
 		if len(srcs) > 0 {
@@ -701,44 +722,6 @@ func (c *Chat) Reply(chat, text string) string {
 		}
 		return msg
 	}
-	var picked []cand
-	used := map[string]bool{}
-	// "who/what is X": the encyclopedia intro's first sentence is the best definition; lead with it when the top source has one.
-	if reDef.MatchString(strings.ToLower(query)) && len(results) > 0 {
-		top := rerankResults(query, results)[0]
-		if ss := sentences(Sanitize(trunc(top.Snippet, 700))); len(ss) > 0 {
-			for i, x := range srcs {
-				if x.URL == top.URL {
-					first := noLinks(ss[0])
-					used[first] = true
-					picked = append(picked, cand{text: first, src: i, pos: -1, cover: 1})
-				}
-			}
-		}
-	}
-	for _, cd := range ranked {
-		if len(picked) >= 3 {
-			break
-		}
-		if used[cd.text] || cd.cover < minCover || cd.score < 0.75*ranked[0].score {
-			continue
-		}
-		used[cd.text] = true
-		picked = append(picked, cd)
-	}
-	var rest []string
-	for _, cd := range ranked {
-		if !used[cd.text] && cd.cover >= minCover && cd.score >= 0.4*ranked[0].score && len(rest) < 6 {
-			rest = append(rest, cd.text)
-		}
-	}
-	// show the chosen sentences in the order they appear on the page
-	sort.SliceStable(picked, func(a, b int) bool {
-		if picked[a].src != picked[b].src {
-			return picked[a].src < picked[b].src
-		}
-		return picked[a].pos < picked[b].pos
-	})
 	var parts []string
 	seen := map[int]bool{}
 	for _, p := range picked {
@@ -746,7 +729,6 @@ func (c *Chat) Reply(chat, text string) string {
 		parts = append(parts, p.text)
 	}
 	var ls []string
-	st.srcs = nil
 	for i, s := range srcs {
 		if seen[i] {
 			ls = append(ls, fmt.Sprintf("[%d] %s", len(ls)+1, s.URL))
@@ -779,11 +761,11 @@ func subjectQuery(q string) string {
 }
 
 var synonyms = map[string][]string{
-	"tall": {"height", "metre", "meter", "feet", "high", "highest", "tallest"}, "high": {"height", "metre", "feet", "elevation", "highest"},
+	"deep": {"depth", "deepest"}, "tall": {"height", "metre", "meter", "feet", "high", "highest", "tallest"}, "high": {"height", "metre", "feet", "elevation", "highest"},
 	"population": {"inhabitant", "census", "resident", "people"}, "old": {"age", "born", "year"},
 	"far": {"distance", "kilometre", "mile", "km"}, "long": {"length", "kilometre", "mile", "year"},
 	"big": {"size", "area", "square"}, "cost": {"price", "dollar", "usd"}, "price": {"cost", "dollar", "usd"},
-	"die": {"death", "died"}, "wrote": {"author", "written", "writer", "novel", "book", "published"}, "write": {"author", "written", "writer", "novel", "book"}, "discover": {"discovered", "discoverer"}, "paint": {"painter", "painted"}, "direct": {"directed", "director"}, "built": {"construct", "completed", "opened", "erected"}, "build": {"construct", "completed", "opened"}, "when": {}, "die2": nil, "born": {"birth"}, "found": {"founded", "established"}, "invent": {"inventor", "invented"},
+	"die": {"death", "died"}, "wrote": {"author", "written", "writer", "novel", "book", "published"}, "penned": {"author", "written", "writer", "novel"}, "writer": {"author", "wrote", "written", "novel"}, "author": {"writer", "wrote", "written", "novel"}, "authored": {"author", "written", "writer"}, "write": {"author", "written", "writer", "novel", "book"}, "discover": {"discovered", "discoverer"}, "paint": {"painter", "painted"}, "direct": {"directed", "director"}, "built": {"construct", "completed", "opened", "erected"}, "build": {"construct", "completed", "opened"}, "when": {}, "die2": nil, "born": {"birth"}, "found": {"founded", "established"}, "invent": {"inventor", "invented"},
 }
 
 var reRefNoise = regexp.MustCompile(`(?i)↑|\^|archived (from|at|on)|retrieved \d|wayback|\bISBN\b|\bdoi\b|\bS2CID\b|\bPMID\b|\bpp?\. ?\d|^\W*(see also|references|external links)\b|^["“]`)
@@ -855,7 +837,10 @@ func cleanTitleOf(srcs []SearchResult) string {
 // requirePredicate: words of the question that are NOT the page subject (title) say what is being asked
 // ("wrote", "far", "built"). A sentence must contain one of them (or a synonym), otherwise it only repeats the
 // subject ("Things Fall Apart ...plot...") and is irrelevant. When the subject covers every term, nothing is required.
+var reHowAttr = regexp.MustCompile(`^how (far|tall|high|long|old|big|deep)\b`)
+
 func requirePredicate(query, title string, ranked []cand) []cand {
+	var howAttr map[string]bool
 	subj := map[string]bool{}
 	for _, t := range terms(title) {
 		subj[t] = true
@@ -878,14 +863,22 @@ func requirePredicate(query, title string, ranked []cand) []cand {
 	if len(attr) > 0 {
 		pred = attr
 	}
+	howAttr = map[string]bool{}
+	if m := reHowAttr.FindStringSubmatch(strings.ToLower(query)); m != nil {
+		howAttr[stemW(m[1])] = true // "how far": the word "far" alone ("far side") is not an answer
+	}
+	needNum := reQty.MatchString(strings.ToLower(query))
 	var out []cand
 	for _, c := range ranked {
+		if needNum && !reDigit.MatchString(c.text) {
+			continue // a quantity question is answered by a sentence with a number
+		}
 		have := map[string]bool{}
 		for _, t := range terms(c.text) {
 			have[t] = true
 		}
 		for _, t := range pred {
-			ok := have[t]
+			ok := have[t] && !howAttr[t]
 			for _, x := range synonyms[t] {
 				ok = ok || (have[x] && !unitWord[x])
 			}
@@ -915,3 +908,107 @@ func fitSentences(parts []string, max int) string {
 
 // unit words appear in many unrelated sentences (a diameter in km is not a distance), so they only help scoring.
 var unitWord = map[string]bool{"metre": true, "meter": true, "feet": true, "kilometre": true, "mile": true, "km": true, "dollar": true, "usd": true, "year": true, "square": true, "people": true}
+
+// extraMax: a second sentence is added only when it is practically as good as the best one (score within 92%).
+func extraMax(ranked []cand) int {
+	if len(ranked) > 1 && false && ranked[1].score >= 0.97*ranked[0].score {
+		return 1
+	}
+	return 0
+}
+
+var roman = map[string]string{"ii": "2", "iii": "3", "iv": "4", "vi": "6", "vii": "7", "viii": "8"}
+
+// subjectPages keeps only results whose whole title is made of words from the question ("Mount Everest" for
+// "how tall is Mount Everest"), so related pages ("Mount Everest in 2018", "Capital punishment in X") are not mined.
+// If no result qualifies, all results are kept.
+func subjectPages(q string, rs []SearchResult) []SearchResult {
+	qt := map[string]bool{}
+	for _, t := range terms(q) {
+		qt[t] = true
+	}
+	var out []SearchResult
+	for _, r := range rs {
+		tt := terms(cleanTitle(r.Title))
+		if len(tt) == 0 {
+			continue
+		}
+		all := true
+		for _, t := range tt {
+			if !qt[t] {
+				all = false
+			}
+		}
+		if all {
+			out = append(out, r)
+		}
+	}
+	if len(out) == 0 {
+		return rs
+	}
+	return out
+}
+
+// evaluate ranks candidate sentences and returns the supported answer sentence(s), the unused supported ones, and
+// whether anything supports an answer. A weak or off-attribute match returns ok=false (abstain).
+func evaluate(query string, results, srcs []SearchResult, cands []cand) (picked []cand, rest []string, ok bool) {
+	ranked := rank(query, append([]cand(nil), cands...))
+	ranked = requirePredicate(query, cleanTitleOf(srcs), ranked)
+	minCover := 0.34
+	if nt := len(uniqTerms(query)); nt >= 3 {
+		minCover = 0.6
+	} else if nt == 2 {
+		minCover = 0.5
+	}
+	if len(ranked) == 0 || ranked[0].cover < minCover {
+		return nil, nil, false
+	}
+	used := map[string]bool{}
+	same := func(a, b string) bool {
+		n := 40
+		if len(a) < n || len(b) < n {
+			return a == b
+		}
+		return a[:n] == b[:n]
+	}
+	isUsed := func(t string) bool {
+		for u := range used {
+			if same(u, t) {
+				return true
+			}
+		}
+		return false
+	}
+	// "who/what is X": the encyclopedia intro's first sentence is the best definition; lead with it.
+	if reDef.MatchString(strings.ToLower(query)) && len(srcs) > 0 {
+		for _, cd := range cands {
+			if cd.src == 0 && cd.pos == 0 {
+				used[cd.text] = true
+				picked = append(picked, cd)
+				break
+			}
+		}
+	}
+	for _, cd := range ranked {
+		if len(picked) >= 1+extraMax(ranked) {
+			break
+		}
+		if isUsed(cd.text) || cd.cover < minCover || cd.score < 0.75*ranked[0].score {
+			continue
+		}
+		used[cd.text] = true
+		picked = append(picked, cd)
+	}
+	for _, cd := range ranked {
+		if !isUsed(cd.text) && cd.cover >= minCover && cd.score >= 0.75*ranked[0].score && len(rest) < 6 {
+			rest = append(rest, cd.text)
+		}
+	}
+	sort.SliceStable(picked, func(a, b int) bool {
+		if picked[a].src != picked[b].src {
+			return picked[a].src < picked[b].src
+		}
+		return picked[a].pos < picked[b].pos
+	})
+	return picked, rest, len(picked) > 0
+}

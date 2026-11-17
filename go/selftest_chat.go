@@ -23,15 +23,18 @@ func SelfTestChat(tools *Tools, curl string, log func(string)) bool {
 	}
 	start := time.Now()
 	deadline := start.Add(150 * time.Second)
-	type q struct{ in, want, name string }
+	type q struct{ in, want, name, not string }
 	for _, t := range []q{
-		{"hey", "", "small talk"},
-		{"what can you do?", "search", "capabilities"},
-		{"what is the capital of Nigeria?", "Abuja", "web answer + page fetch"},
-		{"more", "", "follow-up 'more'"},
-		{"who was Ada Lovelace", "mathematician", "definition lead"},
-		{"how tall is Mount Kilimanjaro", "5,895", "numeric answer"},
-		{"write me a poem", "can't write", "honest refusal"},
+		{"hey", "", "small talk", ""},
+		{"what can you do?", "search", "capabilities", ""},
+		{"what is the capital of Nigeria?", "Abuja", "web answer + page fetch", "punishment"},
+		{"more", "", "follow-up 'more'", "punishment"},
+		{"who was Ada Lovelace", "mathematician", "definition lead", "Day is"},
+		{"how tall is Mount Kilimanjaro", "5,895", "numeric answer", "Multiple species"},
+		{"who wrote Things Fall Apart", "Achebe", "author question", "Okonkwo"},
+		{"how far is the moon from earth", "distance", "distance question", "59%"},
+		{"when was the Eiffel Tower built", "1887", "date question", "1891"},
+		{"write me a poem", "can't write", "honest refusal", ""},
 	} {
 		if time.Now().After(deadline) {
 			check(t.name, false, "time budget exhausted")
@@ -39,7 +42,8 @@ func SelfTestChat(tools *Tools, curl string, log func(string)) bool {
 		}
 		t0 := time.Now()
 		r := c.Reply("selftest", t.in)
-		check(t.name, strings.Contains(strings.ToLower(r), strings.ToLower(t.want)) && r != "", fmt.Sprintf("(%.1fs) %s", time.Since(t0).Seconds(), strings.ReplaceAll(r, "\n", " ")))
+		good := strings.Contains(strings.ToLower(r), strings.ToLower(t.want)) && r != "" && (t.not == "" || !strings.Contains(strings.ToLower(r), strings.ToLower(t.not)))
+		check(t.name, good, fmt.Sprintf("(%.1fs) %s", time.Since(t0).Seconds(), strings.ReplaceAll(r, "\n", " ")))
 	}
 	// private destinations must be refused before any request
 	_, _, err := FetchPage(ct, res, "https://localtest.me/")

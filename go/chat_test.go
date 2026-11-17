@@ -209,3 +209,48 @@ func TestNeverCutsSentenceMidWay(t *testing.T) {
 		t.Fatalf("cut or overflow: %d", len(got))
 	}
 }
+
+const tfa2 = `<html><head><title>Things Fall Apart - Wikipedia</title></head><body><p>Things Fall Apart is the 1958 debut novel by Nigerian author Chinua Achebe. It is a milestone in African literature and has been translated into dozens of languages.</p>
+<p>Achebe wrote in English since he considers the existing standard for written Igbo language as stilted, which he revealed in a 1994 interview with a magazine. In the story Okonkwo is a respected warrior in Umuofia who rises to fame after a contest.</p></body></html>`
+
+const moon2 = `<html><head><title>Moon - Wikipedia</title></head><body><p>The Moon orbits Earth at an average distance of 384,400 km (238,900 mi), about 30 times the diameter of Earth.</p>
+<p>From a distance, the day and night phases of the lunar day are visible as the lunar phases, and the Moon passes through the shadow of Earth during an eclipse.</p>
+<p>About 59% of the surface of the Moon is visible from Earth owing to the differences in libration across many years.</p></body></html>`
+
+func TestAdversarialParaphrases(t *testing.T) {
+	type tc struct {
+		page, title, q string
+		must, not  []string
+	}
+	cases := []tc{
+		{tfa2, "Wikipedia - Things Fall Apart", "who wrote Things Fall Apart", []string{"Chinua Achebe"}, []string{"Okonkwo", "Igbo"}},
+		{tfa2, "Wikipedia - Things Fall Apart", "who is the author of Things Fall Apart?", []string{"Chinua Achebe"}, []string{"Okonkwo", "Igbo"}},
+		{tfa2, "Wikipedia - Things Fall Apart", "which writer penned Things Fall Apart", []string{"Chinua Achebe"}, []string{"Okonkwo"}},
+		{moon2, "Wikipedia - Moon", "how far is the moon from earth", []string{"384,400"}, []string{"From a distance", "59%"}},
+		{moon2, "Wikipedia - Moon", "what's the distance between the Earth and the Moon?", []string{"384,400"}, []string{"From a distance", "59%"}},
+		{moon2, "Wikipedia - Moon", "how far away is the moon", []string{"384,400"}, []string{"From a distance", "59%"}},
+	}
+	for _, x := range cases {
+		s := &fakeS{res: []SearchResult{{Title: x.title, URL: "https://example.com/p", Snippet: "x"}}}
+		c, _, _ := newTestChat(s, map[string]PageResult{"https://example.com/p": page(x.page)}, map[string]string{"example.com": "93.184.216.34"})
+		got := c.Reply("1", x.q)
+		for _, m := range x.must {
+			if !strings.Contains(got, m) {
+				t.Errorf("%q: missing %q in %q", x.q, m, got)
+			}
+		}
+		for _, n := range x.not {
+			if strings.Contains(got, n) {
+				t.Errorf("%q: unrelated %q in %q", x.q, n, got)
+			}
+		}
+	}
+}
+
+func TestAbstainsWhenNoSentenceSupportsAttribute(t *testing.T) {
+	s := &fakeS{res: []SearchResult{{Title: "Wikipedia - Moon", URL: "https://example.com/p", Snippet: "x"}}}
+	c, _, _ := newTestChat(s, map[string]PageResult{"https://example.com/p": page("<p>The Moon is Earth's only natural satellite and it has been studied by many missions over the years.</p><p>From a distance, the day and night phases of the lunar day are visible as the lunar phases to observers.</p>")}, map[string]string{"example.com": "93.184.216.34"})
+	if got := c.Reply("1", "how far is the moon from earth"); !strings.Contains(got, "won't guess") {
+		t.Fatalf("should abstain: %q", got)
+	}
+}
