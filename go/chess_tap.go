@@ -74,10 +74,14 @@ func chessMarkup(p Pos, whiteBottom bool, plies int, sel string) string {
 // "-" = remove it) and a full reply when a move was played.
 func (c *Chess) Tap(chat, data string) (popup, markup string, rep *ChessReply) {
 	parts := strings.Split(data, ":")
-	if len(parts) != 3 || parts[0] != "cm" || sqIndex(parts[1]) < 0 {
+	promoPick := len(parts) == 3 && parts[0] == "cm" && len(parts[1]) == 2 && parts[1][0] == '=' && strings.ContainsRune("qrbn", rune(parts[1][1]))
+	if len(parts) != 3 || parts[0] != "cm" || (!promoPick && sqIndex(parts[1]) < 0) {
 		return "", "", nil
 	}
-	sq := sqIndex(parts[1])
+	sq := -1
+	if !promoPick {
+		sq = sqIndex(parts[1])
+	}
 	if !c.enabled() {
 		return "Chess is off.", "", nil
 	}
@@ -100,14 +104,34 @@ func (c *Chess) Tap(chat, data string) (popup, markup string, rep *ChessReply) {
 	}
 	legal := p.Legal()
 	own := func(s int) bool { v := p.b[s]; return v != 0 && (v > 0) == g.White }
+	if promoPick && g.Promo == "" {
+		return "No promotion is waiting.", "", nil
+	}
 	if g.Sel != "" {
 		si := sqIndex(g.Sel)
 		var mv *Mv
+		var promos []Mv
+		want := int8(0)
+		if promoPick {
+			want = int8(strings.Index(" pnbrqk", parts[1][1:]))
+			sq = sqIndex(g.Promo)
+		}
 		for i := range legal {
-			if int(legal[i].from) == si && int(legal[i].to) == sq && (legal[i].promo == 0 || legal[i].promo == wQ) {
-				mv = &legal[i]
+			if int(legal[i].from) == si && int(legal[i].to) == sq {
+				if legal[i].promo != 0 {
+					promos = append(promos, legal[i])
+				}
+				if legal[i].promo == want {
+					mv = &legal[i]
+				}
 			}
 		}
+		if len(promos) > 0 && !promoPick {
+			g.Promo = sqName(int8(sq))
+			saveJSON(c.Path, f)
+			return "Promote to: Queen, Rook, Bishop or Knight?", promoMarkup(len(g.Moves)), nil
+		}
+		g.Promo = ""
 		if mv != nil {
 			g.Sel = ""
 			yourSAN := SAN(p, *mv, legal)
@@ -221,3 +245,16 @@ type GameHandler interface {
 }
 
 func (c *Chess) Prefix() string { return "cm:" }
+
+func promoMarkup(plies int) string {
+	type btn struct {
+		T string `json:"text"`
+		D string `json:"callback_data"`
+	}
+	row := []btn{}
+	for _, o := range []struct{ n, k string }{{"Queen ♕", "q"}, {"Rook ♖", "r"}, {"Bishop ♗", "b"}, {"Knight ♘", "n"}} {
+		row = append(row, btn{o.n, fmt.Sprintf("cm:=%s:%d", o.k, plies)})
+	}
+	b, _ := json.Marshal(map[string]any{"inline_keyboard": [][]btn{row}})
+	return string(b)
+}

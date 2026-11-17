@@ -26,6 +26,7 @@ type ChessSave struct {
 	Over   bool     `json:"over"`
 	Result string   `json:"result,omitempty"`
 	Date   string   `json:"date"`
+	Promo  string   `json:"promo,omitempty"`
 	Sel    string   `json:"sel,omitempty"` // square picked by a tap, waiting for its destination
 }
 
