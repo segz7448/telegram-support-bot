@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -302,9 +304,11 @@ type Runner struct {
 	MaxErrors   int // 0 = unlimited consecutive-poll-errors (test hook)
 	RateN       int
 	RateS       time.Duration
-	Tools       *Tools           // optional lookups layered over the Brain
-	Chat        *Chat            // optional general chat (rules + web search + extraction, no language model); replaces the Brain-first order
-	PollSec     int              // getUpdates long-poll seconds (0 = 20). Short polls survive mobile links that drop idle connections.
+	Tools       *Tools // optional lookups layered over the Brain
+	Chat        *Chat  // optional general chat (rules + web search + extraction, no language model); replaces the Brain-first order
+	PollSec     int    // getUpdates long-poll seconds (0 = 20). Short polls survive mobile links that drop idle connections.
+	runid       string
+	startAt     time.Time
 	QuiesceFile string           // optional absolute path; see parkIfAsked
 	ParkSleep   func()           // test hook
 	Clock       func() time.Time // test hook (nil = time.Now)
@@ -410,6 +414,35 @@ func saveOffset(p string, off int) error {
 // parkIfAsked implements a file-based quiesce handshake: when QuiesceFile exists the bot stops polling, writes
 // QuiesceFile+".status" atomically ({"state":"parked","offset":N}) and stays parked (no exit, no polling) until the
 // file is removed. It then resumes. Returns false when the loop should stop (MaxErrors test hook only).
+// runID is random per process start, so a status file from an earlier run can never be mistaken for this run's.
+func (r *Runner) runID() string {
+	if r.runid == "" {
+		var x [8]byte
+		if _, err := rand.Read(x[:]); err == nil {
+			r.runid = hex.EncodeToString(x[:])
+		} else {
+			r.runid = fmt.Sprint(time.Now().UnixNano())
+		}
+	}
+	return r.runid
+}
+
+func (r *Runner) started() time.Time {
+	if r.startAt.IsZero() {
+		r.startAt = time.Now()
+	}
+	return r.startAt
+}
+
+// clearStaleStatus removes only this bot's own quiesce status file (QuiesceFile+".status") left by an earlier run.
+func (r *Runner) clearStaleStatus() {
+	r.runID()
+	r.started()
+	if r.QuiesceFile != "" {
+		os.Remove(r.QuiesceFile + ".status")
+	}
+}
+
 func (r *Runner) parkIfAsked(offset int) {
 	if r.QuiesceFile == "" {
 		return
@@ -418,7 +451,7 @@ func (r *Runner) parkIfAsked(offset int) {
 		return
 	}
 	st := r.QuiesceFile + ".status"
-	b, _ := json.Marshal(map[string]any{"state": "parked", "offset": offset, "bot_id": stateBotID})
+	b, _ := json.Marshal(map[string]any{"state": "parked", "offset": offset, "bot_id": stateBotID, "run_id": r.runID(), "started_unix": r.started().Unix(), "written_unix": time.Now().Unix()})
 	if os.WriteFile(st+".tmp", b, 0600) == nil {
 		os.Rename(st+".tmp", st)
 	}
@@ -490,7 +523,9 @@ func (r *Runner) Run() error {
 			r.Log(fmt.Sprintf("reply sent (total %d, collage)", replies))
 		}
 	}
+	r.clearStaleStatus()
 	for {
+		r.parkIfAsked(offset) // before anything else: while parked there are no polls, sends, typing or scheduled sends
 		// albums arrive as separate updates, possibly across several polls: handle one after it has been quiet for
 		// `idle`, or at the latest 20 s after its first picture
 		for acid, a := range albums {
@@ -531,7 +566,6 @@ func (r *Runner) Run() error {
 				r.Log("reminder sent")
 			}
 		}
-		r.parkIfAsked(offset)
 		ps := pollSec
 		if len(albums) > 0 && ps > 1 {
 			ps = 1 // short poll while an album is still being collected

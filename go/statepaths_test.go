@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -210,4 +212,66 @@ func countCalls(a *albumT, m string) int {
 		}
 	}
 	return n
+}
+
+type hookT struct {
+	updates []map[string]any
+	polled  bool
+	fn      func(method, text string)
+}
+
+func (h *hookT) Post(api, token, method string, p url.Values, to int) ([]byte, error) {
+	h.fn(method, p.Get("text"))
+	if method == "getUpdates" {
+		if h.polled {
+			return nil, &APIError{Msg: "script over"}
+		}
+		h.polled = true
+		out, _ := json.Marshal(map[string]any{"ok": true, "result": h.updates})
+		return out, nil
+	}
+	return []byte(`{"ok":true,"result":{}}`), nil
+}
+
+func TestQuiesceMidBatchFinishesOnlyCurrentUpdate(t *testing.T) {
+	defer withBot("111")()
+	d := t.TempDir()
+	q := filepath.Join(d, "q")
+	var sent []string
+	var parkedCalls int
+	parked := false
+	tr := &hookT{}
+	tr.fn = func(method string, text string) {
+		if parked {
+			parkedCalls++
+		}
+		if method == "sendMessage" {
+			sent = append(sent, text)
+			if len(sent) == 1 {
+				wr(t, q, "") // the flag appears while the first update is being handled
+			}
+		}
+	}
+	r := &Runner{T: tr, API: "http://x", Token: "T", Brain: brain(t), StatePath: filepath.Join(d, "s.json"), DeadPath: filepath.Join(d, "dead"),
+		Sleep: func(time.Duration) {}, Log: func(string) {}, RateN: 10, RateS: time.Minute, MaxErrors: 1, QuiesceFile: q}
+	tr.updates = []map[string]any{msg(1, "hello", "private"), msg(2, "bye", "private")}
+	n := 0
+	r.ParkSleep = func() {
+		parked = true
+		n++
+		if off, _ := loadOffset(r.StatePath); off != 2 { // only the first update is done and saved
+			t.Errorf("offset while parked %d", off)
+		}
+		if len(sent) != 1 {
+			t.Errorf("second update processed while parked: %v", sent)
+		}
+		if n == 2 {
+			parked = false
+			os.Remove(q)
+		}
+	}
+	r.Run()
+	if parkedCalls != 0 || len(sent) != 2 {
+		t.Fatalf("calls while parked %d, sent %v", parkedCalls, sent)
+	}
 }

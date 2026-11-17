@@ -26,6 +26,12 @@ func main() {
 		fmt.Println("tgbot", Version)
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "--selftest-state" { // tokenless, mocked transport, own temp folder only
+		if !SelfTestState(dir, func(s string) { fmt.Fprintln(os.Stderr, s) }) {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--show-offset" { // strictly read-only; run it only while the bot is stopped
 		off, id, from, err := showOffset(dir, os.Getenv("TG_STATE_FILE"))
 		if err != nil {
@@ -134,12 +140,7 @@ func main() {
 	if chat != nil && chat.Admin != nil {
 		chat.Admin.RatePerMin = rateN
 	}
-	if i := strings.Index(tok, ":"); i > 0 { // the numeric bot id is not secret; the part after the colon is and is never kept
-		id := tok[:i]
-		if _, e := strconv.Atoi(id); e == nil {
-			stateBotID = id
-		}
-	}
+	stateBotID = botIDFromToken(tok)
 	statePath, deadPath, serr := resolveStatePaths(dir, stateOpts{ExtState: os.Getenv("TG_STATE_FILE"), ExtDead: os.Getenv("TG_DEAD_LETTER_FILE"), AllowFresh: os.Getenv("TG_STATE_ALLOW_FRESH") == "1", Require: os.Getenv("TG_STATE_REQUIRE_EXISTING") == "1"}, func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
 	if serr != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", serr)
@@ -164,4 +165,19 @@ func quiescePath() string {
 		os.Exit(1)
 	}
 	return p
+}
+
+// botIDFromToken returns the numeric bot id (the part before the colon), or "" when the token has no such prefix.
+// The secret part after the colon is never returned, stored or logged.
+func botIDFromToken(tok string) string {
+	i := strings.Index(tok, ":")
+	if i <= 0 {
+		return ""
+	}
+	for _, c := range tok[:i] {
+		if c < '0' || c > '9' {
+			return ""
+		}
+	}
+	return tok[:i]
 }
