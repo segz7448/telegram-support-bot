@@ -457,7 +457,31 @@ func (r *Runner) Run() error {
 						call(r.T, r.API, r.Token, "sendChatAction", url.Values{"chat_id": {fmt.Sprint(cid)}, "action": {"typing"}}, 5)
 					}
 					var reply string
-					if r.Chat != nil {
+					if r.Chat != nil && r.Chat.Chess != nil {
+						if cr, okc := r.Chat.Chess.Handle(fmt.Sprint(cid), text); okc {
+							reply = cr.Text
+							if len(cr.PNG) > 0 {
+								if ps, okp := r.T.(PhotoSender); okp {
+									done := false
+									for a := 0; a < 2 && !done; a++ {
+										raw, perr := ps.PostPhoto(r.API, r.Token, fmt.Sprint(cid), cr.Text, cr.PNG, filepath.Dir(r.StatePath), 60)
+										var body map[string]any
+										if perr == nil && json.Unmarshal(raw, &body) == nil {
+											if okb, _ := body["ok"].(bool); okb {
+												done = true
+											}
+										}
+									}
+									if done {
+										replies++
+										r.Log(fmt.Sprintf("reply sent (total %d, chess board)", replies))
+										sent = true
+									}
+								}
+							}
+						}
+					}
+					if r.Chat != nil && !sent && reply == "" {
 						if png, capt, derr, isDesign := Design(text); isDesign {
 							if derr != "" {
 								reply = derr

@@ -255,6 +255,7 @@ type Chat struct {
 	GH     GitHubGetter  // keyless public GitHub repository search (nil = off)
 	News   *News         // keyless news headlines and owner daily digest (nil = off)
 	Rem    *Reminders    // in-bot reminders (nil = off)
+	Chess  *Chess        // chess games with a board picture (nil = off)
 	Notes  *Notes        // per-chat notes and tasks with tags (nil = off)
 	Admin  *Admin        // owner status/export and per-chat rate limit (nil = off)
 }
