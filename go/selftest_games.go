@@ -63,6 +63,10 @@ func SelfTestGames(dir string, log func(string)) bool {
 	dr.Handle("8", "draughts level 5")
 	d = timed(func() { _, _, r2 = dr.Tap("8", "dr:c3:0"); _, _, r2 = dr.Tap("8", "dr:b4:0") })
 	check("draughts level 5 tap move plus reply time", r2 != nil && strings.Contains(r2.Text, "Me:"), d)
+	ld := &Ludo{Path: filepath.Join(tmp, "ludo.json")}
+	ld.Handle("10", "ludo level 3")
+	d = timed(func() { rep, hit = ld.Handle("10", "roll") })
+	check("ludo roll and bot reply (real random dice)", hit && strings.Contains(rep.Text, "You rolled") && len(rep.PNG) > 500, d)
 	_, hit = ch.Handle("7", "hello there")
 	check("ordinary chat is not captured by games", !hit, "")
 	log("note: this drives the real game code with temp files; it does not touch Telegram, the network or live state")
