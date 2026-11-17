@@ -18,7 +18,8 @@ type Admin struct {
 	Rem        *Reminders
 	News       *News
 	Now        func() time.Time
-	RatePerMin int // reported only; the limit itself is enforced in the poll loop
+	PassDir    string // folder for locally generated passwords (empty = off)
+	RatePerMin int    // reported only; the limit itself is enforced in the poll loop
 
 }
 
@@ -30,6 +31,9 @@ func (a *Admin) now() time.Time {
 }
 
 func (a *Admin) Handle(chat, text string) (string, bool) {
+	if rep, ok := a.passwordCmd(chat, text); ok {
+		return rep, true
+	}
 	low := strings.ToLower(strings.TrimSpace(text))
 	switch {
 	case low == "/status" || low == "/status@" || strings.HasPrefix(low, "/status@"):

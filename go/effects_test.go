@@ -215,7 +215,7 @@ func TestPhotoOverlayCropConvertCollage(t *testing.T) {
 	if d, _ := dim("crop centre 50%"); d != "200x150" {
 		t.Fatalf("pct got %s", d)
 	}
-	if d, _ := dim(`caption: Hello`); d != "400x324" {
+	if d, _ := dim(`caption: Hello`); d != "400x372" {
 		t.Fatalf("caption band got %s", d)
 	}
 	if d, _ := dim(`watermark: (c) me`); d != "400x300" {

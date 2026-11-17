@@ -143,13 +143,16 @@ func mediaGroup(u map[string]any) string {
 }
 
 // handleCollage downloads up to 4 album pictures and posts one collage.
-func (r *Runner) handleCollage(cid int64, fileIDs []string) string {
+func (r *Runner) handleCollage(cid int64, fileIDs []string, seen int) string {
 	fg, ok1 := r.T.(FileGetter)
 	ps, ok2 := r.T.(PhotoSender)
 	if !ok1 || !ok2 {
 		return "Picture editing isn't available on this connection."
 	}
-	if len(fileIDs) < 2 || len(fileIDs) > 4 {
+	if seen > 4 {
+		return "That album has more than 4 pictures. Send 2 to 4 for a collage."
+	}
+	if len(fileIDs) < 2 {
 		return "A collage needs 2 to 4 pictures sent together as one album (select them and send at once), with the caption \"collage\"."
 	}
 	var pics [][]byte
@@ -299,10 +302,12 @@ type Runner struct {
 	MaxErrors  int // 0 = unlimited consecutive-poll-errors (test hook)
 	RateN      int
 	RateS      time.Duration
-	Tools      *Tools        // optional lookups layered over the Brain
-	Chat       *Chat         // optional general chat (rules + web search + extraction, no language model); replaces the Brain-first order
-	PollSec    int           // getUpdates long-poll seconds (0 = 20). Short polls survive mobile links that drop idle connections.
-	Heartbeat  time.Duration // periodic non-secret status line (0 = off)
+	Tools      *Tools           // optional lookups layered over the Brain
+	Chat       *Chat            // optional general chat (rules + web search + extraction, no language model); replaces the Brain-first order
+	PollSec    int              // getUpdates long-poll seconds (0 = 20). Short polls survive mobile links that drop idle connections.
+	Clock      func() time.Time // test hook (nil = time.Now)
+	AlbumIdle  time.Duration    // quiet time before an album is handled (0 = 2s)
+	Heartbeat  time.Duration    // periodic non-secret status line (0 = off)
 }
 
 // reply: explicit tool requests first, then the Brain; open questions the Brain could not answer go to lookups.
@@ -412,7 +417,36 @@ func (r *Runner) Run() error {
 	lastPhoto := map[int64]time.Time{}
 	albums := map[int64]*album{}
 	rateWarn := map[int64]time.Time{}
+	now := r.Clock
+	if now == nil {
+		now = time.Now
+	}
+	idle := r.AlbumIdle
+	if idle <= 0 {
+		idle = 2 * time.Second
+	}
+	flush := func(acid int64, a *album) {
+		delete(albums, acid)
+		msg := "To make a collage, send 2 to 4 pictures together as one album with the caption \"collage\"."
+		if reCollage.MatchString(a.caption) {
+			call(r.T, r.API, r.Token, "sendChatAction", url.Values{"chat_id": {fmt.Sprint(acid)}, "action": {"upload_photo"}}, 5)
+			msg = r.handleCollage(acid, a.ids, a.n)
+		}
+		if msg != "" {
+			call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(acid)}, "text": {msg}}, 30)
+		} else {
+			replies++
+			r.Log(fmt.Sprintf("reply sent (total %d, collage)", replies))
+		}
+	}
 	for {
+		// albums arrive as separate updates, possibly across several polls: handle one after it has been quiet for
+		// `idle`, or at the latest 20 s after its first picture
+		for acid, a := range albums {
+			if now().Sub(a.last) >= idle || now().Sub(a.first) >= 20*time.Second {
+				flush(acid, a)
+			}
+		}
 		if len(rate) > 1000 { // evict idle chats
 			for k, ts := range rate {
 				if len(ts) == 0 || time.Since(ts[len(ts)-1]) > r.RateS {
@@ -446,7 +480,11 @@ func (r *Runner) Run() error {
 				r.Log("reminder sent")
 			}
 		}
-		res, err := call(r.T, r.API, r.Token, "getUpdates", url.Values{"offset": {fmt.Sprint(offset)}, "timeout": {fmt.Sprint(pollSec)}, "allowed_updates": {`["message","callback_query"]`}}, pollSec+15)
+		ps := pollSec
+		if len(albums) > 0 && ps > 1 {
+			ps = 1 // short poll while an album is still being collected
+		}
+		res, err := call(r.T, r.API, r.Token, "getUpdates", url.Values{"offset": {fmt.Sprint(offset)}, "timeout": {fmt.Sprint(ps)}, "allowed_updates": {`["message","callback_query"]`}}, ps+15)
 		if err != nil {
 			errs++
 			failPolls++
@@ -485,19 +523,28 @@ func (r *Runner) Run() error {
 			if cq, okq := u["callback_query"].(map[string]any); okq {
 				r.handleTap(cq)
 			} else if pcid, fid, psize, pcap, isPhoto := photoMessage(u); isPhoto && r.Chat != nil && mediaGroup(u) != "" {
-				// album member: gather it; the album is handled once, after this batch of updates
+				// album member: gather it; the album is handled once it has been quiet (see flush)
 				a := albums[pcid]
-				if a == nil || a.gid != mediaGroup(u) {
-					a = &album{gid: mediaGroup(u)}
-					albums[pcid] = a
+				if a != nil && a.gid != mediaGroup(u) {
+					flush(pcid, a) // a different album from the same chat: finish the old one first
+					a = nil
 				}
-				if len(a.ids) < 5 {
-					a.ids = append(a.ids, fid)
+				if a == nil {
+					if len(albums) < 8 {
+						a = &album{gid: mediaGroup(u), first: now()}
+						albums[pcid] = a
+					}
 				}
-				if pcap != "" && a.caption == "" {
-					a.caption = pcap
+				if a != nil {
+					a.last = now()
+					a.n++
+					if len(a.ids) < 4 && psize <= maxImageBytes {
+						a.ids = append(a.ids, fid)
+					}
+					if pcap != "" && a.caption == "" {
+						a.caption = pcap
+					}
 				}
-				_ = psize
 			} else if pcid, fid, psize, pcap, isPhoto := photoMessage(u); isPhoto && r.Chat != nil {
 				if time.Since(lastPhoto[pcid]) < 15*time.Second {
 					call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(pcid)}, "text": {"One picture at a time please. Try again in a few seconds."}}, 30)
@@ -640,27 +687,15 @@ func (r *Runner) Run() error {
 				return nil
 			}
 		}
-		for acid, a := range albums {
-			delete(albums, acid)
-			msg := "To make a collage, send 2 to 4 pictures together as one album with the caption \"collage\"."
-			if reCollage.MatchString(a.caption) {
-				call(r.T, r.API, r.Token, "sendChatAction", url.Values{"chat_id": {fmt.Sprint(acid)}}, 5)
-				msg = r.handleCollage(acid, a.ids)
-			}
-			if msg != "" {
-				call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(acid)}, "text": {msg}}, 30)
-			} else {
-				replies++
-				r.Log(fmt.Sprintf("reply sent (total %d, collage)", replies))
-			}
-		}
 	}
 }
 
 const photoHelp = "Send a picture with a caption saying what to do. I can: sharpen, black and white, sepia, brighter / darker, more contrast / less contrast, rotate left / right / 180, mirror, flip upside down, crop square / crop to 16:9 / crop centre 70%, blur, invert colours, resize 50%, convert to PNG, a text caption or watermark (caption: your words), and a collage of 2 to 4 pictures sent as one album. You can combine them (for example: black and white, more contrast, sharpen). It is local and not AI: sharpening can't bring back detail that blur removed."
 
 type album struct {
-	gid     string
-	ids     []string
-	caption string
+	gid         string
+	ids         []string
+	n           int // pictures seen (more than 4 is refused)
+	caption     string
+	first, last time.Time
 }

@@ -454,9 +454,9 @@ func overlayText(dst *image.RGBA, s string, x, y, k int, col color.Color) {
 }
 
 func textScale(w int, s string) int {
-	k := w / 320
-	if k < 1 {
-		k = 1
+	k := w / 128
+	if k < 2 {
+		k = 2
 	}
 	for k > 1 && (7*len(s)+2)*k > w {
 		k--
