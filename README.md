@@ -54,3 +54,23 @@ No token is stored in this repo. Never commit one.
 - Long-poll is 20s (curl max-time 35s, connect timeout 15s) instead of 50s/70s, so idle-dropped connections fail fast. Retry backoff is 1,2,4,8,15s (capped at 15s).
 - Non-secret log lines: "polling started", "first poll ok", "poll recovered after N failed attempts", "reply sent (total N)", "reply undelivered...", and a "alive: ..." counter line every 10 minutes. No token, message text or chat ids are logged. Poll errors still print only the curl error text (token redacted).
 - Local tests cannot show that replies work on the phone; only a live message test can.
+
+## v2: lookups and tools (go/tools.go)
+This is still NOT a generative model or general AI, and no new ML training was done: the Naive Bayes intents, rules and abstention are unchanged. Adding scraped text would not make it understand more, so v2 adds *explicit tools* that either compute locally or quote a named public source with a link:
+
+| Ask | How it works | Source / licence |
+|---|---|---|
+| `12*(3+4)`, `15% of 80`, `7 times 6` | local arithmetic parser (no network) | - |
+| `5 km in miles`, `70 f to c` | local table (length, mass, volume, speed, temperature) | - |
+| `100 usd to eur` | live rate, ECB currency list only, cached 1h | frankfurter.dev (European Central Bank reference rates) |
+| `weather in Lagos` | place lookup then current weather, first geocoder match is shown by name | Open-Meteo geocoding API + wttr.in (best effort, fair-use) |
+| `define serendipity`, `what does X mean` | first definition per part of speech | en.wiktionary.org REST API, CC BY-SA |
+| `wiki Alan Turing`, `who is ...`, `what is ...`, other open questions the Brain cannot answer | top Wikipedia search hit, intro text and link; rejects weak matches and disambiguation pages | en.wikipedia.org MediaWiki API, CC BY-SA 4.0, with article link |
+
+Routing: explicit tool phrases run first; everything else goes to the Brain; only when the Brain would say "I'm not sure" / out-of-scope does an open question go to Wikipedia. Business questions (hours, refunds, orders) are never sent to the web (tested). `/help` lists abilities. Replies from tools are remembered for "repeat that".
+
+Limits, stated plainly: answers are only as good as the one top search hit; it can pick the wrong article, and the question may not be answered by an intro paragraph. No multi-step reasoning, no conversation memory beyond "repeat". English only. Needs internet; offline it says it could not reach the service. At most 20 lookups per minute overall, 15s timeout each, responses capped at 1 MB. Your search words are sent to the services above (a User-Agent naming this repo is sent too). Queries and answers are never logged (only "lookup ok (wikipedia)" style lines), and nothing is stored.
+
+Self-test (no token, no Telegram contact): `./tgbot-arm64 --version`, `./tgbot-arm64 --selftest` (offline), `TG_CURL=/system/bin/curl ./tgbot-arm64 --selftest-net` (also curl + TLS to Wikipedia and Frankfurter). Prints PASS/FAIL lines, exit code 1 on failure.
+
+Previous build, kept for rollback: git tag `v1.1-polling-fix` (commit 1d4ab659ba738ddfa7c95620284cd0983a36d12c).

@@ -21,10 +21,22 @@ func main() {
 		fmt.Fprintln(os.Stderr, "cannot load model:", err)
 		os.Exit(1)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Println("tgbot", Version)
+		return
+	}
+	curlPath := os.Getenv("TG_CURL")
+	tools := NewTools(CurlTransport{Curl: curlPath}, func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
+	if len(os.Args) > 1 && (os.Args[1] == "--selftest" || os.Args[1] == "--selftest-net") {
+		if !SelfTest(b, tools, os.Args[1] == "--selftest-net") {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--console" {
 		sc := bufio.NewScanner(os.Stdin)
 		for fmt.Print("you> "); sc.Scan(); fmt.Print("you> ") {
-			fmt.Println("bot>", b.Reply(sc.Text(), "console"))
+			fmt.Println("bot>", (&Runner{Brain: b, Tools: tools}).reply(sc.Text(), "console"))
 		}
 		return
 	}
@@ -42,12 +54,12 @@ func main() {
 	if os.Getenv("TELEGRAM_ALLOW_CUSTOM_API") == "1" && os.Getenv("TELEGRAM_API_BASE") != "" {
 		api = os.Getenv("TELEGRAM_API_BASE") // testing only
 	}
-	curl := os.Getenv("TG_CURL")
+	curl := curlPath
 	r := &Runner{T: CurlTransport{Curl: curl}, API: api, Token: tok, Brain: b,
 		StatePath: filepath.Join(dir, "state.json"), DeadPath: filepath.Join(dir, "dead_letter.jsonl"),
 		Sleep: time.Sleep, Log: func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) },
-		Heartbeat: 10 * time.Minute, RateN: 10, RateS: 60 * time.Second}
-	fmt.Println("bot running")
+		Tools: tools, Heartbeat: 10 * time.Minute, RateN: 10, RateS: 60 * time.Second}
+	fmt.Println("bot running", Version)
 	if err := r.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", redact(err.Error(), tok))
 		os.Exit(1)

@@ -162,8 +162,33 @@ type Runner struct {
 	MaxErrors  int // 0 = unlimited consecutive-poll-errors (test hook)
 	RateN      int
 	RateS      time.Duration
+	Tools      *Tools        // optional lookups layered over the Brain
 	PollSec    int           // getUpdates long-poll seconds (0 = 20). Short polls survive mobile links that drop idle connections.
 	Heartbeat  time.Duration // periodic non-secret status line (0 = off)
+}
+
+// reply: explicit tool requests first, then the Brain; open questions the Brain could not answer go to lookups.
+func (r *Runner) reply(text, chat string) string {
+	if r.Tools == nil {
+		return r.Brain.Reply(text, chat)
+	}
+	if rep, ok := r.Tools.Command(text); ok {
+		r.Brain.Remember(chat, rep)
+		return rep
+	}
+	if !strings.HasPrefix(strings.TrimSpace(text), "/") {
+		if rep, ok := r.Tools.Pre(text); ok {
+			r.Brain.Remember(chat, rep)
+			return rep
+		}
+		if _, intent := r.Brain.Debug(text); intent == "fallback" || intent == "out_of_scope" {
+			if rep, ok := r.Tools.Post(text); ok {
+				r.Brain.Remember(chat, rep)
+				return rep
+			}
+		}
+	}
+	return r.Brain.Reply(text, chat)
 }
 
 // loadOffset: missing file = fresh start (0). An unreadable or malformed file is an error: silently
@@ -286,7 +311,7 @@ func (r *Runner) Run() error {
 				} else {
 					rate[cid] = append(q, now)
 					sent := false
-					reply := r.Brain.Reply(text, fmt.Sprint(cid))
+					reply := r.reply(text, fmt.Sprint(cid))
 					for a := 0; a < 3 && !sent; a++ {
 						_, err := call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(cid)}, "text": {reply}}, 30)
 						if err == nil {

@@ -388,6 +388,21 @@ func (b *Brain) answer(text string) (string, string) {
 // Debug returns the reply and the route/intent chosen, without touching chat memory.
 func (b *Brain) Debug(text string) (string, string) { return b.answer(strings.TrimSpace(text)) }
 
+// Remember stores r as the chat's last reply (used by "repeat that") for replies produced outside the Brain.
+func (b *Brain) Remember(chat, r string) {
+	if chat == "" {
+		return
+	}
+	if _, ok := b.last[chat]; !ok {
+		b.order = append(b.order, chat)
+	}
+	b.last[chat] = r
+	for len(b.order) > 1000 {
+		delete(b.last, b.order[0])
+		b.order = b.order[1:]
+	}
+}
+
 func (b *Brain) Reply(text string, chat string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
