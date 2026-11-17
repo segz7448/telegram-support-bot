@@ -16,7 +16,7 @@ import (
 	"sync"
 )
 
-// Ludo for two (you against the bot), our own simplified 2-player variant, described honestly in /ludo help:
+// Ludo for two (you against the bot), a 2-player variant of the common Ludo rules (checked against the Wikipedia Ludo article; house variants are named in /ludo help):
 // 52 track squares, each side has 4 tokens, a 6 brings a token out and gives another roll (three sixes in a row
 // forfeit the turn), landing on an opponent token on a non-safe square sends it home, exact roll to finish.
 // Dice come from crypto/rand for BOTH sides; the bot never sees a roll before it is made.
@@ -263,7 +263,7 @@ func (l *Ludo) load() (*ludoFile, error) {
 	return f, nil
 }
 
-const ludoHelp = "Ludo on the standard cross-shaped board, two players sitting opposite (you red at the bottom, me yellow at the top). Rule choices, since Ludo has many house variants: 4 tokens each; you need a 6 to bring a token out onto your start square; any 6 gives another roll, and three 6s in a row lose the turn; a roll must be used if any token can move (you pick which); landing on my lone token sends it back to base, except on a safe square (the four start squares and the four star squares); a capture or reaching home gives no extra roll; tokens of one colour may share a square; there are no blockades; you need the exact roll to enter home. First to get all four tokens home wins. Dice come from the system's secure random generator for both of us, and I never see your roll before it is made. Say \"ludo\" or \"ludo level 2\" (levels 1-3), then tap Roll or say \"roll\". My level 1 moves randomly, level 2 uses a one-step scoring rule, level 3 also averages over your possible replies; these are baseline heuristics. Also: ludo board, ludo resign."
+const ludoHelp = "Ludo on the standard cross-shaped board, two players sitting opposite (you red at the bottom, me yellow at the top). Rule choices, since Ludo has many house variants: 4 tokens each; you need a 6 to bring a token out onto your start square; any 6 gives another roll, and if your third roll in a row is a 6 it is not played and the turn passes (moves you already made that turn stay); a roll must be used if any token can move (you pick which); landing on my lone token sends it back to base, except on a safe square (the four start squares and the four star squares); a capture or reaching home gives no extra roll; tokens of one colour may share a square; there are no blockades; you need the exact roll to enter home (a token's route is 56 steps from its start square: 50 more track squares, 5 home-column squares, then home). House choices: captures and finishing give no extra roll, and no blockades, which differ from some published variants. First to get all four tokens home wins. Dice come from the system's secure random generator for both of us, and I never see your roll before it is made. Say \"ludo\" or \"ludo level 2\" (levels 1-3), then tap Roll or say \"roll\". My level 1 moves randomly, level 2 uses a one-step scoring rule, level 3 also averages over your possible replies; these are baseline heuristics. Also: ludo board, ludo resign."
 
 func (l *Ludo) buttons(g *LudoSave) string {
 	type btn struct {

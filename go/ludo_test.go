@@ -171,3 +171,33 @@ func TestLudoGame(t *testing.T) {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+func TestLudoBoundaries(t *testing.T) {
+	g := &LudoSave{}
+	g.Tok[0] = [4]int{50, 51, 55, 56}
+	g.Tok[1] = [4]int{-1, -1, -1, -1}
+	// p=50 is the last track square (one step before the home column); 6 steps lands exactly on home (56).
+	if lg := g.legal(0, 6); len(lg) != 1 || lg[0] != 0 {
+		t.Fatalf("from 50 a 6 must finish and nothing else may move 6: %v", lg)
+	}
+	if lg := g.legal(0, 5); len(lg) != 2 { // 50->55 and 51->56
+		t.Fatalf("roll 5: %v", lg)
+	}
+	if lg := g.legal(0, 1); len(lg) != 3 { // 50,51,55 may move; 56 may not
+		t.Fatalf("roll 1: %v", lg)
+	}
+	if lg := g.legal(0, 2); len(lg) != 2 { // 50->52, 51->53 ; 55 overshoots
+		t.Fatalf("roll 2: %v", lg)
+	}
+	// the route length: entering at p=0 then 56 steps ends at 56
+	h := &LudoSave{}
+	h.Tok[0] = [4]int{-1, 56, 56, 56}
+	h.Tok[1] = [4]int{-1, -1, -1, -1}
+	if lg := h.legal(0, 6); len(lg) != 1 || lg[0] != 0 {
+		t.Fatalf("entry on 6: %v", lg)
+	}
+	h.move(0, 0, 6)
+	if h.Tok[0][0] != 0 {
+		t.Fatalf("entry should place token on its start square, got %d", h.Tok[0][0])
+	}
+}
