@@ -178,8 +178,9 @@ func photoMessage(u map[string]any) (cid int64, fileID string, size int, caption
 // handlePhoto sharpens a picture sent with a sharpen-type caption. Pictures are never stored: they live in memory
 // during the call, and the result is a new JPEG without camera metadata.
 func (r *Runner) handlePhoto(cid int64, fileID string, size int, caption string) string {
-	if !reSharpen.MatchString(caption) {
-		return "I can sharpen a slightly blurry picture. Send it again with the caption: sharpen"
+	ops := parseOps(caption)
+	if len(ops) == 0 {
+		return photoHelp
 	}
 	fg, ok1 := r.T.(FileGetter)
 	ps, ok2 := r.T.(PhotoSender)
@@ -202,11 +203,11 @@ func (r *Runner) handlePhoto(cid int64, fileID string, size int, caption string)
 	if err != nil {
 		return "I couldn't download that picture. Try again."
 	}
-	out, dims, err := SharpenImage(data, 2, 1.2)
+	out, dims, err := EditImage(data, ops)
 	if err != nil {
-		return "I can't sharpen that: " + err.Error() + "."
+		return "I can't edit that: " + err.Error() + "."
 	}
-	capt := "Sharpened (" + dims + "): local unsharp mask, no AI. It makes edges crisper but can't bring back detail that blur removed. Telegram may recompress it. Camera metadata (location, device) is not included."
+	capt := "Edited (" + dims + "): " + describeOps(ops) + ". Local pixel edits, no AI. Your original is untouched; this is a new picture. Camera metadata (location, device) is not included. Telegram may recompress it."
 	raw, perr := ps.PostPhoto(r.API, r.Token, fmt.Sprint(cid), capt, out, filepath.Dir(r.StatePath), 90)
 	var body map[string]any
 	if perr == nil && json.Unmarshal(raw, &body) == nil {
@@ -214,7 +215,7 @@ func (r *Runner) handlePhoto(cid int64, fileID string, size int, caption string)
 			return ""
 		}
 	}
-	return "I sharpened it but couldn't upload the result. Try again in a minute."
+	return "I edited it but couldn't upload the result. Try again in a minute."
 }
 
 func validMessage(u map[string]any) (int64, string, bool) {
@@ -510,3 +511,5 @@ func (r *Runner) Run() error {
 		}
 	}
 }
+
+const photoHelp = "Send a picture with a caption saying what to do. I can: sharpen, black and white, sepia, brighter / darker, more contrast / less contrast, rotate left / right / 180, mirror, resize 50%. You can combine them (for example: black and white, more contrast, sharpen). It is local and not AI: sharpening can't bring back detail that blur removed."
