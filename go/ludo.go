@@ -22,8 +22,8 @@ import (
 // Dice come from crypto/rand for BOTH sides; the bot never sees a roll before it is made.
 //
 // Progress p of a token: -1 in base, 0..50 on the track (absolute square (start+p) mod 52), 51..55 home column,
-// 56 home. Starts: side 0 (human, red) at square 0, side 1 (bot, blue) at square 26.
-// Safe squares (no capture): 0, 8, 13, 21, 26, 34, 39, 47.
+// 56 home. Standard four-colour board; two players sit opposite: you are red (bottom), the bot is yellow (top). Starts: you at square 40, the bot at 14.
+// Safe squares (no capture) are the four start squares and the four star squares: 1, 9, 14, 22, 27, 35, 40, 48.
 
 type LudoSave struct {
 	Level   int       `json:"level"`
@@ -48,8 +48,8 @@ type Ludo struct {
 
 func (l *Ludo) Prefix() string { return "ld:" }
 
-var ludoStart = [2]int{0, 26}
-var ludoSafe = map[int]bool{0: true, 8: true, 13: true, 21: true, 26: true, 34: true, 39: true, 47: true}
+var ludoStart = [2]int{40, 14}
+var ludoSafe = map[int]bool{1: true, 9: true, 14: true, 22: true, 27: true, 35: true, 40: true, 48: true}
 
 func (l *Ludo) die() int {
 	if l.Dice != nil {
@@ -263,7 +263,7 @@ func (l *Ludo) load() (*ludoFile, error) {
 	return f, nil
 }
 
-const ludoHelp = "Ludo (two players, my own simplified rules): 4 tokens each, 52-square track. Say \"ludo\" (or \"ludo level 2\"; levels 1-3), then tap Roll or say \"roll\". You need a 6 to bring a token out and a 6 gives another roll (three 6s in a row lose the turn). Land on my token (not on a safe star/start square) to send it home. You need the exact roll to finish. Dice are random for both of us and I never see your roll in advance. My level 1 plays randomly, level 2 uses a one-step scoring rule, level 3 also averages over your possible replies. That is a baseline heuristic, not deep search. Also: ludo board, ludo resign."
+const ludoHelp = "Ludo on the standard cross-shaped board, two players sitting opposite (you red at the bottom, me yellow at the top). Rule choices, since Ludo has many house variants: 4 tokens each; you need a 6 to bring a token out onto your start square; any 6 gives another roll, and three 6s in a row lose the turn; a roll must be used if any token can move (you pick which); landing on my lone token sends it back to base, except on a safe square (the four start squares and the four star squares); a capture or reaching home gives no extra roll; tokens of one colour may share a square; there are no blockades; you need the exact roll to enter home. First to get all four tokens home wins. Dice come from the system's secure random generator for both of us, and I never see your roll before it is made. Say \"ludo\" or \"ludo level 2\" (levels 1-3), then tap Roll or say \"roll\". My level 1 moves randomly, level 2 uses a one-step scoring rule, level 3 also averages over your possible replies; these are baseline heuristics. Also: ludo board, ludo resign."
 
 func (l *Ludo) buttons(g *LudoSave) string {
 	type btn struct {
@@ -471,98 +471,174 @@ func (l *Ludo) Tap(chat, data string) (string, string, *ChessReply) {
 	return "Done.", "-", l.reply(g, msg)
 }
 
-// ---- board picture: a 14x14 ring (52 squares), home columns inside, bases in the middle ----
+// ---- board picture: the standard 15x15 cross board ----
 
 func ludoRing() [52][2]int {
 	var r [52][2]int
 	i := 0
-	for y := 13; y >= 0; y-- {
-		r[i] = [2]int{0, y}
-		i++
+	add := func(x, y int) { r[i] = [2]int{x, y}; i++ }
+	for x := 0; x <= 5; x++ {
+		add(x, 6)
 	}
-	for x := 1; x <= 13; x++ {
-		r[i] = [2]int{x, 0}
-		i++
+	for y := 5; y >= 0; y-- {
+		add(6, y)
 	}
-	for y := 1; y <= 13; y++ {
-		r[i] = [2]int{13, y}
-		i++
+	add(7, 0)
+	add(8, 0)
+	for y := 1; y <= 5; y++ {
+		add(8, y)
 	}
-	for x := 12; x >= 1; x-- {
-		r[i] = [2]int{x, 13}
-		i++
+	for x := 9; x <= 14; x++ {
+		add(x, 6)
 	}
+	add(14, 7)
+	add(14, 8)
+	for x := 13; x >= 9; x-- {
+		add(x, 8)
+	}
+	for y := 9; y <= 14; y++ {
+		add(8, y)
+	}
+	add(7, 14)
+	add(6, 14)
+	for y := 13; y >= 9; y-- {
+		add(6, y)
+	}
+	for x := 5; x >= 0; x-- {
+		add(x, 8)
+	}
+	add(0, 7)
 	return r
 }
 
-func ludoCell(side, p, slot int, ring [52][2]int) (int, int) {
+// ludoPos returns the centre of a token in cell units (may be fractional for base slots).
+func ludoPos(side, p, slot int, ring [52][2]int) (float64, float64) {
 	switch {
 	case p == -1:
 		if side == 0 {
-			return 4 + slot%2, 10 + slot/2
+			return 1.5 + 2*float64(slot%2), 10.5 + 2*float64(slot/2)
 		}
-		return 8 + slot%2, 2 + slot/2
+		return 10.5 + 2*float64(slot%2), 1.5 + 2*float64(slot/2)
 	case p <= 50:
 		c := ring[ludoAbs(side, p)]
-		return c[0], c[1]
-	default:
-		k := p - 51 // 0..5
+		return float64(c[0]) + 0.5, float64(c[1]) + 0.5
+	case p <= 55:
+		k := float64(p - 51)
 		if side == 0 {
-			return 2, 12 - k
+			return 7.5, 13.5 - k
 		}
-		return 11, 1 + k
+		return 7.5, 1.5 + k
 	}
+	if side == 0 {
+		return 7.5, 8.4
+	}
+	return 7.5, 6.6
 }
 
 func renderLudo(g *LudoSave) []byte {
-	const cell, pad = 34, 16
-	size := cell*14 + 2*pad
+	const cell, pad = 34, 10
+	size := cell*15 + 2*pad
 	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	draw.Draw(img, img.Bounds(), image.NewUniform(rgb(244, 239, 236)), image.Point{}, draw.Src)
-	ring := ludoRing()
-	box := func(x, y int, c color.RGBA) {
-		draw.Draw(img, image.Rect(pad+x*cell+1, pad+y*cell+1, pad+x*cell+cell-1, pad+y*cell+cell-1), image.NewUniform(c), image.Point{}, draw.Src)
+	draw.Draw(img, img.Bounds(), image.NewUniform(rgb(250, 247, 242)), image.Point{}, draw.Src)
+	fillRect := func(x0, y0, x1, y1 float64, c color.RGBA) {
+		draw.Draw(img, image.Rect(pad+int(x0*cell), pad+int(y0*cell), pad+int(x1*cell), pad+int(y1*cell)), image.NewUniform(c), image.Point{}, draw.Src)
 	}
+	red, yel, grn, blu := rgb(214, 56, 52), rgb(244, 190, 40), rgb(70, 160, 80), rgb(50, 100, 190)
+	pale := func(c color.RGBA) color.RGBA {
+		return rgb(uint8(255-(255-int(c.R))/3), uint8(255-(255-int(c.G))/3), uint8(255-(255-int(c.B))/3))
+	}
+	// base quadrants
+	fillRect(0, 0, 6, 6, grn)
+	fillRect(9, 0, 15, 6, yel)
+	fillRect(0, 9, 6, 15, red)
+	fillRect(9, 9, 15, 15, blu)
+	for _, q := range [][4]float64{{0.8, 0.8, 5.2, 5.2}, {9.8, 0.8, 14.2, 5.2}, {0.8, 9.8, 5.2, 14.2}, {9.8, 9.8, 14.2, 14.2}} {
+		fillRect(q[0], q[1], q[2], q[3], rgb(255, 255, 255))
+	}
+	ring := ludoRing()
 	for i, c := range ring {
 		col := rgb(255, 255, 255)
-		if ludoSafe[i] {
-			col = rgb(255, 232, 140)
+		switch i {
+		case 1:
+			col = pale(grn)
+		case 14:
+			col = yel
+		case 27:
+			col = pale(blu)
+		case 40:
+			col = red
 		}
-		if i == 0 {
-			col = rgb(240, 150, 150)
+		fillRect(float64(c[0]), float64(c[1]), float64(c[0]+1), float64(c[1]+1), rgb(60, 60, 60))
+		fillRect(float64(c[0])+0.04, float64(c[1])+0.04, float64(c[0]+1)-0.04, float64(c[1]+1)-0.04, col)
+		if ludoSafe[i] && i != 1 && i != 14 && i != 27 && i != 40 {
+			cx, cy := pad+c[0]*cell+cell/2, pad+c[1]*cell+cell/2
+			chessDisc(img, cx, cy, 8, rgb(120, 120, 120))
+			chessDisc(img, cx, cy, 6, rgb(250, 220, 90))
 		}
-		if i == 26 {
-			col = rgb(150, 180, 240)
-		}
-		box(c[0], c[1], col)
 	}
-	for k := 0; k < 6; k++ {
-		box(2, 12-k, rgb(250, 200, 200))
-		box(11, 1+k, rgb(200, 215, 250))
+	for k := 0; k < 5; k++ { // home columns
+		fillRect(7, float64(13-k), 8, float64(14-k), rgb(60, 60, 60))
+		fillRect(7.04, float64(13-k)+0.04, 7.96, float64(14-k)-0.04, pale(red))
+		fillRect(7, float64(1+k), 8, float64(2+k), rgb(60, 60, 60))
+		fillRect(7.04, float64(1+k)+0.04, 7.96, float64(2+k)-0.04, pale(yel))
+		fillRect(float64(1+k), 7, float64(2+k), 8, rgb(60, 60, 60))
+		fillRect(float64(1+k)+0.04, 7.04, float64(2+k)-0.04, 7.96, pale(grn))
+		fillRect(float64(13-k), 7, float64(14-k), 8, rgb(60, 60, 60))
+		fillRect(float64(13-k)+0.04, 7.04, float64(14-k)-0.04, 7.96, pale(blu))
 	}
+	// centre: four coloured wedges drawn as triangles by scanline
+	cx0, cy0 := pad+6*cell, pad+6*cell
+	for y := 0; y < 3*cell; y++ {
+		for x := 0; x < 3*cell; x++ {
+			u, v := x-3*cell/2, y-3*cell/2
+			var c color.RGBA
+			switch {
+			case v < 0 && abs2(u) <= -v:
+				c = yel
+			case v > 0 && abs2(u) <= v:
+				c = red
+			case u < 0:
+				c = grn
+			default:
+				c = blu
+			}
+			img.SetRGBA(cx0+x, cy0+y, c)
+		}
+	}
+	// base slots
 	for s := 0; s < 2; s++ {
 		for slot := 0; slot < 4; slot++ {
-			x, y := ludoCell(s, -1, slot, ring)
-			box(x, y, rgb(228, 224, 220))
+			x, y := ludoPos(s, -1, slot, ring)
+			cx, cy := pad+int(x*cell), pad+int(y*cell)
+			col := red
+			if s == 1 {
+				col = yel
+			}
+			chessDisc(img, cx, cy, 15, pale(col))
 		}
 	}
 	small := face(fonts.bold, 14)
 	cnt := map[[2]int]int{}
 	for s := 0; s < 2; s++ {
 		for i, p := range g.Tok[s] {
-			x, y := ludoCell(s, p, i, ring)
+			x, y := ludoPos(s, p, i, ring)
+			key := [2]int{int(x * 10), int(y * 10)}
+			off := cnt[key]
+			cnt[key]++
 			if p == 56 {
-				x, y = 6+s*2, 6
+				x += float64(off-1) * 0.3
 			}
-			off := cnt[[2]int{x, y}]
-			cnt[[2]int{x, y}]++
-			cx, cy := pad+x*cell+cell/2+off*4, pad+y*cell+cell/2-off*4
-			col := rgb(204, 44, 44)
+			cx, cy := pad+int(x*cell)+off*5, pad+int(y*cell)-off*5
+			if p == 56 {
+				cx, cy = pad+int(x*cell), pad+int(y*cell)
+			}
+			col, ring2 := red, rgb(255, 255, 255)
 			if s == 1 {
-				col = rgb(36, 82, 168)
+				col = rgb(224, 160, 20)
 			}
-			chessDisc(img, cx, cy, 14, rgb(255, 255, 255))
-			chessDisc(img, cx, cy, 12, col)
+			chessDisc(img, cx, cy, 14, rgb(30, 30, 30))
+			chessDisc(img, cx, cy, 12, ring2)
+			chessDisc(img, cx, cy, 10, col)
 			n := strconv.Itoa(i + 1)
 			drawText(img, small, rgb(255, 255, 255), cx-textW(small, n)/2, cy+5, n)
 		}
@@ -570,4 +646,11 @@ func renderLudo(g *LudoSave) []byte {
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, img)
 	return buf.Bytes()
+}
+
+func abs2(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
