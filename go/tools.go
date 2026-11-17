@@ -68,6 +68,7 @@ type Tools struct {
 	GeoAPI  string
 	WxAPI   string
 	FxAPI   string
+	erTS    time.Time
 	ErAPI   string // ExchangeRate-API open endpoint (fallback for currencies the ECB list lacks)
 	erRates map[string]float64
 	erDate  string

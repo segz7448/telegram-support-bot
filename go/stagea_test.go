@@ -303,3 +303,53 @@ func TestNairaFallbackRefusesStaleData(t *testing.T) {
 		t.Fatalf("stale data must be refused: %v %q", ok, r)
 	}
 }
+
+func TestErFreshBoundaries(t *testing.T) {
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		ts   time.Time
+		want bool
+	}{
+		{"zero", time.Time{}, false},
+		{"just fresh", now.Add(-erMaxAge), true},
+		{"just stale", now.Add(-erMaxAge - time.Second), false},
+		{"future beyond skew", now.Add(time.Hour + time.Second), false},
+		{"future within skew", now.Add(time.Hour), true},
+		{"today", now.Add(-12 * time.Hour), true},
+	}
+	for _, c := range cases {
+		if got := erFresh(c.ts, now); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestNairaFallbackFutureInvalidAndCacheAging(t *testing.T) {
+	clock := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	for name, stamp := range map[string]string{"future": "Fri, 04 Dec 2026", "invalid": "not a date"} {
+		tl, f, _ := newFake(t)
+		f.routes["open.er-api"] = `{"result":"success","time_last_update_utc":"STAMP","rates":{"USD":1,"NGN":1500,"EUR":0.9,"GBP":0.8,"JPY":150,"KES":130,"GHS":15,"ZAR":18,"AUD":1.5,"CAD":1.4,"CHF":0.9,"CNY":7,"INR":83,"MXN":17,"BRL":5,"SEK":10,"NOK":10,"DKK":6.8,"PLN":4,"CZK":23,"HUF":360,"RON":4.5,"TRY":34,"THB":35,"SGD":1.3,"HKD":7.8,"NZD":1.6,"KRW":1300,"PHP":57,"IDR":15500,"MYR":4.4,"ILS":3.7,"ISK":138,"BGN":1.8,"AED":3.67,"SAR":3.75,"EGP":49,"PKR":278,"BDT":120,"VND":25000,"COP":4000,"ARS":1000,"CLP":950,"PEN":3.7,"UAH":41,"RUB":95,"QAR":3.64,"KWD":0.3}}`
+		f.routes["open.er-api"] = strings.Replace(f.routes["open.er-api"], "STAMP", stamp+" 00:02:31 +0000", 1)
+		if name == "invalid" {
+			f.routes["open.er-api"] = strings.Replace(f.routes["open.er-api"], stamp+" 00:02:31 +0000", stamp, 1)
+		}
+		tl.Now = func() time.Time { return clock }
+		tl.ErAPI = "https://open.er-api.com/v6/latest/USD"
+		if r, _ := tl.Pre("100 usd to ngn"); strings.Contains(r, "NGN =") || !strings.Contains(r, "out of date") {
+			t.Errorf("%s: %q", name, r)
+		}
+	}
+	// a cached table that ages past the limit is dropped and never served
+	tl, f, _ := newFake(t)
+	f.routes["open.er-api"] = `{"result":"success","time_last_update_utc":"Tue, 17 Nov 2026 00:02:31 +0000","rates":{"USD":1,"NGN":1500,"EUR":0.9,"GBP":0.8,"JPY":150,"KES":130,"GHS":15,"ZAR":18,"AUD":1.5,"CAD":1.4,"CHF":0.9,"CNY":7,"INR":83,"MXN":17,"BRL":5,"SEK":10,"NOK":10,"DKK":6.8,"PLN":4,"CZK":23,"HUF":360,"RON":4.5,"TRY":34,"THB":35,"SGD":1.3,"HKD":7.8,"NZD":1.6,"KRW":1300,"PHP":57,"IDR":15500,"MYR":4.4,"ILS":3.7,"ISK":138,"BGN":1.8,"AED":3.67,"SAR":3.75,"EGP":49,"PKR":278,"BDT":120,"VND":25000,"COP":4000,"ARS":1000,"CLP":950,"PEN":3.7,"UAH":41,"RUB":95,"QAR":3.64,"KWD":0.3}}`
+	tl.Now = func() time.Time { return clock }
+	tl.ErAPI = "https://open.er-api.com/v6/latest/USD"
+	if r, _ := tl.Pre("100 usd to ngn"); !strings.Contains(r, "150000 NGN") || !strings.Contains(r, "Rates By Exchange Rate API: https://www.exchangerate-api.com") {
+		t.Fatalf("fresh: %q", r)
+	}
+	clock = clock.Add(erMaxAge + time.Hour) // cache TTL passed and the table's own date is now too old
+	if r, _ := tl.Pre("100 usd to ngn"); strings.Contains(r, "NGN =") {
+		t.Errorf("aged cache served: %q", r)
+	}
+}

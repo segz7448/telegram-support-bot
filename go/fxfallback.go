@@ -14,6 +14,15 @@ var isoCodes = set(strings.Fields(`aed afn all amd ang aoa ars aud awg azn bam b
 
 const erMaxAge = 4 * 24 * time.Hour // the source refreshes daily; anything older than this is refused
 
+// erFresh: the source's own update time must be valid, not in the future (1 hour of clock skew allowed) and no
+// older than erMaxAge.
+func erFresh(ts, now time.Time) bool {
+	if ts.IsZero() || ts.After(now.Add(time.Hour)) {
+		return false
+	}
+	return now.Sub(ts) <= erMaxAge
+}
+
 const erTTL = 6 * time.Hour // the source updates once a day and asks callers not to poll it
 
 // currencyER converts via ExchangeRate-API's open endpoint (no key). Its open-access page and terms (read 2026-11-17:
@@ -23,6 +32,9 @@ const erTTL = 6 * time.Hour // the source updates once a day and asks callers no
 func (t *Tools) currencyER(v float64, from, to string) string {
 	if t.ErAPI == "" { // off only if TG_FX_FALLBACK=0 (see the terms note above)
 		return "I only know the currencies in the European Central Bank's daily list (like USD, EUR, GBP, JPY), so I can't convert " + from + " or " + to + " yet."
+	}
+	if t.erRates != nil && !erFresh(t.erTS, t.Now()) { // a cached table that has aged out is dropped, never served
+		t.erRates = nil
 	}
 	if t.erRates == nil || t.Now().Sub(t.erAt) > erTTL {
 		if !t.allow() {
@@ -42,11 +54,12 @@ func (t *Tools) currencyER(v float64, from, to string) string {
 			return fmt.Sprintf(unreachable, "the exchange-rate service")
 		}
 		// Refuse stale data: the source says when it last updated, and old rates would mislead.
-		if ts, perr := time.Parse(time.RFC1123Z, d.Update); perr != nil || t.Now().Sub(ts) > erMaxAge {
+		ts, perr := time.Parse(time.RFC1123Z, d.Update)
+		if perr != nil || !erFresh(ts, t.Now()) {
 			t.logf("fx2 data stale or undated")
 			return "The exchange-rate source's data looks out of date (last update " + d.Update + "), so I won't give you a rate from it."
 		}
-		t.erRates, t.erDate, t.erAt = d.Rates, d.Update, t.Now()
+		t.erRates, t.erDate, t.erAt, t.erTS = d.Rates, d.Update, t.Now(), ts
 		t.logf("lookup ok (fx2)")
 	}
 	rf, rt := t.erRates[from], t.erRates[to]
@@ -63,5 +76,5 @@ func (t *Tools) currencyER(v float64, from, to string) string {
 	if i := strings.Index(date, " 00:"); i > 0 {
 		date = date[:i]
 	}
-	return fmt.Sprintf("%s %s = %s %s\nDaily rate from ExchangeRate-API (https://www.exchangerate-api.com), updated %s. Indicative only, not what a bank or shop will give you.", fmtNum(v), from, fmtNum(r), to, date)
+	return fmt.Sprintf("%s %s = %s %s\nRates By Exchange Rate API: https://www.exchangerate-api.com (daily rate, updated %s). Indicative only, not what a bank or shop will give you.", fmtNum(v), from, fmtNum(r), to, date)
 }
