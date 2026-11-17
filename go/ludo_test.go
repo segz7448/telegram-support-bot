@@ -108,7 +108,7 @@ func TestLudoStrength(t *testing.T) {
 			t.Fatalf("level %d should clearly beat random", lv)
 		}
 	}
-	w, n := 0, 300
+	w, n := 0, 400
 	for i := 0; i < n; i++ {
 		a := i % 2
 		var lvs [2]int
@@ -207,10 +207,10 @@ func TestLudoSearchStrength(t *testing.T) {
 	if os.Getenv("LUDO_SEARCH") == "" {
 		t.Skip("opt-in: LUDO_SEARCH=1")
 	}
-	rnd := rand.New(rand.NewSource(5))
+	rnd := rand.New(rand.NewSource(777))
 	l := &Ludo{}
-	for _, pair := range [][2]int{{5, 2}} {
-		w, n := 0, 300
+	for _, pair := range [][2]int{{4, 1}, {4, 2}} {
+		w, n := 0, 400
 		for i := 0; i < n; i++ {
 			a := i % 2
 			var lvs [2]int
