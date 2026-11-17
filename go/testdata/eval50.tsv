@@ -29,7 +29,7 @@ when was the Declaration of Independence signed	(1776|July|August)
 when did the Berlin Wall fall	1989
 when was the printing press invented	(14[0-9]{2}|15th century)
 where is Mount Kilimanjaro	Tanzania
-where is the Great Barrier Reef	(Australia|Queensland|Torres Strait|Coral Sea)
+where is the Great Barrier Reef	(Australia|Queensland)
 where was Marie Curie born	Warsaw
 where was Albert Einstein born	Ulm
 where is Machu Picchu	Peru
@@ -48,4 +48,4 @@ who invented the airplane	(Wright)
 what year did humans land on the moon	1969
 who was the first person to walk on the moon	Armstrong
 how many days are in a leap year	366
-what is the currency of Nigeria	naira
+what is the currency of Nigeria	(naira)

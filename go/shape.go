@@ -93,8 +93,8 @@ var (
 	reSmallDigit  = regexp.MustCompile(`(?:^|[^\d,.])\d(?:$|[^\d,.%])`)
 	reProper      = regexp.MustCompile(`[a-z,]\s+(?:the\s+)?[A-Z][\p{L}]+|\d`)
 	reWhenYear    = regexp.MustCompile(`\b\d{3,4}\b|\b\d{1,2}(?:st|nd|rd|th)[- ]century\b`)
-	reWhereStrict = regexp.MustCompile(`\b(located|situated|lies|lie|stands|found (in|on|across)|based (in|on)|capital of)\b|\b(in|on|across|near|within|between)\s+(?:the\s+)?(?:(?:northern|southern|eastern|western|central|north|south|east|west)\s+)?[A-Z][\p{L}'-]+`)
-	reContrast    = regexp.MustCompile(`(?i)\b(still|simply|instead|rather than|formerly|previously|used to|once|historically|until|not counted|every|each|probably|could|would|might|argue|sometimes|perhaps|term)\b`)
+	reWhereStrict = regexp.MustCompile(`\b(capital of)\b|\b(in|on|off|within|along|at)\s+(?:the\s+)?(?:(?:northern|southern|eastern|western|central|north|south|east|west)\s+)?[A-Z][\p{L}'-]+`)
+	reContrast    = regexp.MustCompile(`(?i)\b(not|never|nor|cannot|no longer|still|simply|rather than|formerly|previously|used to|once|historically|until|not counted|except|excluding|other than|besides|every|each|probably|could|would|might|argue|sometimes|perhaps|term)\b`)
 	reNormWW      = regexp.MustCompile(`(?i)\bworld war (2|two)\b`)
 	reNormW1      = regexp.MustCompile(`(?i)\bworld war (1|one)\b`)
 )
@@ -105,7 +105,9 @@ func normWW(s string) string {
 	return reNormW1.ReplaceAllString(s, "World War I")
 }
 
-// countNear: "how many N ...": a number must sit next to the counted noun, not merely appear in the sentence.
+// countNear: "how many N ...": a number must sit next to the counted noun, and the other words of the question
+// (leap, year, Mars...) must be near that number, so "30 or 31 days ... except in leap years" does not answer
+// "how many days are in a leap year".
 func countNear(q, t string) bool {
 	m := regexp.MustCompile(`(?i)^how many (\w+)`).FindStringSubmatch(q)
 	if m == nil {
@@ -115,8 +117,37 @@ func countNear(q, t string) bool {
 	if len(noun) < 3 {
 		return true
 	}
-	return regexp.MustCompile(`(?i)(\b\d[\d,.]*|\b(two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|hundred|dozen))\s+(\w+\s+){0,1}`+regexp.QuoteMeta(noun)).MatchString(t) ||
-		regexp.MustCompile(`(?i)`+regexp.QuoteMeta(noun)+`\w*\s+(\w+\s+){0,3}(is|are|was|were|had|has|have|number)\s+(\w+\s+){0,2}(\d[\d,.]*|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b`).MatchString(t)
+	num := `(\d[\d,.]*|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|hundred|dozen)`
+	p1 := regexp.MustCompile(`(?i)\b` + num + `\s+(\w+\s+){0,1}` + regexp.QuoteMeta(noun))
+	p2 := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(noun) + `\w*\s+(\w+\s+){0,3}(is|are|was|were|number)\s+(\w+\s+){0,2}` + num + `\b`)
+	loc := p1.FindStringIndex(t)
+	if loc == nil {
+		loc = p2.FindStringIndex(t)
+	}
+	if loc == nil {
+		return false
+	}
+	if rePopQ.MatchString(q) {
+		return true
+	}
+	stop := map[string]bool{"how": true, "many": true, "are": true, "there": true, "does": true, "have": true, "has": true, "the": true, "in": true, "a": true, "an": true, "of": true, "do": true, "is": true, "on": true, "did": true, "was": true}
+	lo, hi := loc[0]-45, loc[1]+45
+	if lo < 0 {
+		lo = 0
+	}
+	if hi > len(t) {
+		hi = len(t)
+	}
+	win := strings.ToLower(t[lo:hi])
+	for _, w := range regexp.MustCompile(`[A-Za-z]+`).FindAllString(strings.ToLower(q), -1)[2:] {
+		if stop[w] || strings.HasPrefix(w, noun) || len(w) < 3 {
+			continue
+		}
+		if !strings.Contains(win, strings.TrimSuffix(w, "s")) {
+			return false
+		}
+	}
+	return true
 }
 
 // stripCaps removes the question's own capitalised subject words from the sentence, so "at Machu Picchu" does not count as a place.
@@ -137,7 +168,8 @@ func reIsAttr(q, t string) bool {
 		return true
 	}
 	a := regexp.QuoteMeta(strings.ToLower(m[1]))
-	return regexp.MustCompile(`(?i)\b` + a + `\b[^.]{0,40}\b(is|are|was)\b|\b(is|are|was)\b[^.]{0,40}\b` + a + `\b|\b(official|national) ` + a).MatchString(t)
+	// the attribute must be stated directly: "X is the currency", "the currency of X is Y", "its symbol is Y"
+	return regexp.MustCompile(`(?i)\b(is|are|was) (the |its |their )?(official |national |legal )?` + a + `\b|\b` + a + `\b( of [^.,;]{1,40})? (is|are|was)\b`).MatchString(t)
 }
 
 // superOK: "what is the tallest X": the sentence must say, with a verb, that something IS the superlative asked (the exact word).
