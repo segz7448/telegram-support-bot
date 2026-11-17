@@ -20,8 +20,7 @@ import (
 // Source: BBC News RSS feeds (https://feeds.bbci.co.uk/news/rss.xml and the section feeds). The BBC's terms
 // (https://www.bbc.co.uk/usingthebbc/terms-of-use/ section 15) allow showing the feed unchanged with BBC credit for
 // personal use; they do not allow plucking metadata or business use. So headlines are shown unchanged, credited, with links.
-// Google News RSS is NOT used by default: it is an undocumented endpoint and its robots.txt does not allow /rss for
-// generic crawlers. It can be switched on by the bot owner (TG_NEWS_GOOGLE=1) for keyword topics, at their own risk.
+// Google News RSS is deliberately not used (undocumented endpoint, no robots allow rule).
 // Feed text is untrusted: titles are shown as plain text with links stripped; only fixed feed URLs are ever fetched
 // (never a URL from a chat message).
 
@@ -53,11 +52,10 @@ type NewsSchedule struct {
 }
 
 type News struct {
-	G      GitHubGetter // plain https GET (no secrets); name kept from the GitHub feature
-	Path   string       // schedule file (outside the deployment dir); "" = scheduling off
-	Owner  string
-	Google bool
-	Now    func() time.Time
+	G     GitHubGetter // plain https GET (no secrets); name kept from the GitHub feature
+	Path  string       // schedule file (outside the deployment dir); "" = scheduling off
+	Owner string
+	Now   func() time.Time
 
 	mu       sync.Mutex
 	cache    map[string]newsCache
@@ -179,16 +177,8 @@ func (n *News) onDemand(rest string) string {
 	return formatNews(items, section, query, src, "")
 }
 
-// fetch returns up to newsMaxItems items. Only fixed BBC feed URLs (or the owner-enabled Google News search) are fetched.
+// fetch returns up to newsMaxItems items. Only fixed BBC feed URLs are fetched.
 func (n *News) fetch(section, query string) ([]NewsItem, string, error) {
-	if query != "" && n.Google {
-		u := "https://news.google.com/rss/search?q=" + url.QueryEscape(query) + "&hl=en-US&gl=US&ceid=US:en"
-		items, err := n.get(u, false)
-		if err != nil {
-			return nil, "", err
-		}
-		return capItems(items), "Google News (owner-enabled, unofficial feed)", nil
-	}
 	var urls []string
 	if query != "" {
 		for _, s := range []string{"top", "world", "business", "technology"} {
@@ -333,11 +323,8 @@ func safeNewsLink(raw string) string {
 		return ""
 	}
 	h := strings.ToLower(u.Hostname())
-	if h != "www.bbc.co.uk" && h != "www.bbc.com" && h != "news.google.com" {
+	if h != "www.bbc.co.uk" && h != "www.bbc.com" {
 		return ""
-	}
-	if h == "news.google.com" {
-		return "https://news.google.com" + u.EscapedPath() // article ids are in the path
 	}
 	u.RawQuery, u.Fragment = "", ""
 	return u.String()
