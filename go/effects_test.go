@@ -184,3 +184,85 @@ func TestPhotoToolkitExtras(t *testing.T) {
 		t.Errorf("describe: %q", d)
 	}
 }
+
+func TestPhotoOverlayCropConvertCollage(t *testing.T) {
+	m := image.NewRGBA(image.Rect(0, 0, 400, 300))
+	for y := 0; y < 300; y++ {
+		for x := 0; x < 400; x++ {
+			m.SetRGBA(x, y, color.RGBA{uint8(x / 2), uint8(y), 90, 255})
+		}
+	}
+	var b bytes.Buffer
+	jpeg.Encode(&b, m, nil)
+	src := b.Bytes()
+	dim := func(caption string) (string, []byte) {
+		ops := parseOps(caption)
+		if len(ops) == 0 {
+			t.Fatalf("no ops from %q", caption)
+		}
+		out, d, err := EditImage(src, ops)
+		if err != nil {
+			t.Fatal(caption, err)
+		}
+		return d, out
+	}
+	if d, _ := dim("crop to 16:9"); d != "400x225" {
+		t.Fatalf("16:9 got %s", d)
+	}
+	if d, _ := dim("crop to 1:1"); d != "300x300" {
+		t.Fatalf("1:1 got %s", d)
+	}
+	if d, _ := dim("crop centre 50%"); d != "200x150" {
+		t.Fatalf("pct got %s", d)
+	}
+	if d, _ := dim(`caption: Hello`); d != "400x324" {
+		t.Fatalf("caption band got %s", d)
+	}
+	if d, _ := dim(`watermark: (c) me`); d != "400x300" {
+		t.Fatalf("watermark got %s", d)
+	}
+	_, png1 := dim("convert to PNG")
+	if len(png1) < 8 || string(png1[1:4]) != "PNG" {
+		t.Fatal("not a PNG")
+	}
+	// words inside the overlay text must not trigger other edits
+	ops := parseOps(`sepia caption: invert blur rotate`)
+	if len(ops) != 2 || ops[0].name == "invert" {
+		t.Fatalf("overlay text leaked into ops: %+v", ops)
+	}
+	if got := cleanOverlayText("héllo\x00 wörld"); got != "hllo wrld" {
+		t.Fatalf("clean %q", got)
+	}
+	out, d, err := Collage([][]byte{src, src, src})
+	if err != nil || d != "984x984" || out[0] != 0xFF {
+		t.Fatalf("collage %v %v", d, err)
+	}
+	if _, _, err := Collage([][]byte{src}); err == nil {
+		t.Fatal("one picture collage accepted")
+	}
+}
+
+// TGBOT_PHOTO=/path.jpg writes the new photo outputs to /tmp/pe_*.(jpg|png) for visual inspection.
+func TestPhotoToolkitRealOutputs(t *testing.T) {
+	p := os.Getenv("TGBOT_PHOTO")
+	if p == "" {
+		t.Skip("set TGBOT_PHOTO")
+	}
+	data, _ := os.ReadFile(p)
+	for name, cap := range map[string]string{"crop169": "crop to 16:9", "crop60": "crop centre 60%", "caption": "caption: Grace Hopper, 1984", "watermark": "watermark: sample (c) test", "png": "convert to PNG, sepia"} {
+		out, _, err := EditImage(data, parseOps(cap))
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		ext := ".jpg"
+		if out[0] == 0x89 {
+			ext = ".png"
+		}
+		os.WriteFile("/tmp/pe_"+name+ext, out, 0o644)
+	}
+	c, _, err := Collage([][]byte{data, data, data, data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile("/tmp/pe_collage.jpg", c, 0o644)
+}

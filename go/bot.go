@@ -135,6 +135,55 @@ func call(t Transport, api, token, method string, params url.Values, timeout int
 
 var reSharpen = regexp.MustCompile(`(?i)\b(sharpen|sharper|sharpness|unblur|deblur|de-blur|fix (?:the )?blur|less blurry|clearer|enhance)\b`)
 
+// mediaGroup returns the album id of a photo message ("" when it is a single picture).
+func mediaGroup(u map[string]any) string {
+	m, _ := u["message"].(map[string]any)
+	g, _ := m["media_group_id"].(string)
+	return g
+}
+
+// handleCollage downloads up to 4 album pictures and posts one collage.
+func (r *Runner) handleCollage(cid int64, fileIDs []string) string {
+	fg, ok1 := r.T.(FileGetter)
+	ps, ok2 := r.T.(PhotoSender)
+	if !ok1 || !ok2 {
+		return "Picture editing isn't available on this connection."
+	}
+	if len(fileIDs) < 2 || len(fileIDs) > 4 {
+		return "A collage needs 2 to 4 pictures sent together as one album (select them and send at once), with the caption \"collage\"."
+	}
+	var pics [][]byte
+	for _, id := range fileIDs {
+		res, err := call(r.T, r.API, r.Token, "getFile", url.Values{"file_id": {id}}, 20)
+		if err != nil {
+			return "I couldn't fetch the pictures from Telegram. Try sending them again."
+		}
+		result, _ := res["result"].(map[string]any)
+		fp, _ := result["file_path"].(string)
+		if fp == "" {
+			return "I couldn't fetch the pictures from Telegram. Try sending them again."
+		}
+		d, err := fg.GetFile(r.API, r.Token, fp, maxImageBytes, 60)
+		if err != nil {
+			return "I couldn't download a picture. Try again."
+		}
+		pics = append(pics, d)
+	}
+	out, dims, err := Collage(pics)
+	if err != nil {
+		return "I can't make that collage: " + err.Error() + "."
+	}
+	capt := fmt.Sprintf("Collage of %d pictures (%s). Local pixel edit, no AI. Originals untouched; camera metadata is not included.", len(pics), dims)
+	raw, perr := ps.PostPhoto(r.API, r.Token, fmt.Sprint(cid), capt, out, filepath.Dir(r.StatePath), 90)
+	var body map[string]any
+	if perr == nil && json.Unmarshal(raw, &body) == nil {
+		if okb, _ := body["ok"].(bool); okb {
+			return ""
+		}
+	}
+	return "I made it but couldn't upload the result. Try again in a minute."
+}
+
 // photoMessage reads a private-chat photo (or image document) and its caption.
 func photoMessage(u map[string]any) (cid int64, fileID string, size int, caption string, ok bool) {
 	m, _ := u["message"].(map[string]any)
@@ -178,6 +227,9 @@ func photoMessage(u map[string]any) (cid int64, fileID string, size int, caption
 // handlePhoto sharpens a picture sent with a sharpen-type caption. Pictures are never stored: they live in memory
 // during the call, and the result is a new JPEG without camera metadata.
 func (r *Runner) handlePhoto(cid int64, fileID string, size int, caption string) string {
+	if reCollage.MatchString(caption) {
+		return "To make a collage, send 2 to 4 pictures together as one album with the caption \"collage\"."
+	}
 	ops := parseOps(caption)
 	if len(ops) == 0 {
 		return photoHelp
@@ -358,6 +410,7 @@ func (r *Runner) Run() error {
 	r.Log(fmt.Sprintf("polling started (long-poll %ds, offset %d)", pollSec, offset))
 	rate := map[int64][]time.Time{}
 	lastPhoto := map[int64]time.Time{}
+	albums := map[int64]*album{}
 	rateWarn := map[int64]time.Time{}
 	for {
 		if len(rate) > 1000 { // evict idle chats
@@ -431,6 +484,20 @@ func (r *Runner) Run() error {
 			uid := int(uidf)
 			if cq, okq := u["callback_query"].(map[string]any); okq {
 				r.handleTap(cq)
+			} else if pcid, fid, psize, pcap, isPhoto := photoMessage(u); isPhoto && r.Chat != nil && mediaGroup(u) != "" {
+				// album member: gather it; the album is handled once, after this batch of updates
+				a := albums[pcid]
+				if a == nil || a.gid != mediaGroup(u) {
+					a = &album{gid: mediaGroup(u)}
+					albums[pcid] = a
+				}
+				if len(a.ids) < 5 {
+					a.ids = append(a.ids, fid)
+				}
+				if pcap != "" && a.caption == "" {
+					a.caption = pcap
+				}
+				_ = psize
 			} else if pcid, fid, psize, pcap, isPhoto := photoMessage(u); isPhoto && r.Chat != nil {
 				if time.Since(lastPhoto[pcid]) < 15*time.Second {
 					call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(pcid)}, "text": {"One picture at a time please. Try again in a few seconds."}}, 30)
@@ -573,7 +640,27 @@ func (r *Runner) Run() error {
 				return nil
 			}
 		}
+		for acid, a := range albums {
+			delete(albums, acid)
+			msg := "To make a collage, send 2 to 4 pictures together as one album with the caption \"collage\"."
+			if reCollage.MatchString(a.caption) {
+				call(r.T, r.API, r.Token, "sendChatAction", url.Values{"chat_id": {fmt.Sprint(acid)}}, 5)
+				msg = r.handleCollage(acid, a.ids)
+			}
+			if msg != "" {
+				call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(acid)}, "text": {msg}}, 30)
+			} else {
+				replies++
+				r.Log(fmt.Sprintf("reply sent (total %d, collage)", replies))
+			}
+		}
 	}
 }
 
-const photoHelp = "Send a picture with a caption saying what to do. I can: sharpen, black and white, sepia, brighter / darker, more contrast / less contrast, rotate left / right / 180, mirror, flip upside down, crop square, blur, invert colours, resize 50%. You can combine them (for example: black and white, more contrast, sharpen). It is local and not AI: sharpening can't bring back detail that blur removed."
+const photoHelp = "Send a picture with a caption saying what to do. I can: sharpen, black and white, sepia, brighter / darker, more contrast / less contrast, rotate left / right / 180, mirror, flip upside down, crop square / crop to 16:9 / crop centre 70%, blur, invert colours, resize 50%, convert to PNG, a text caption or watermark (caption: your words), and a collage of 2 to 4 pictures sent as one album. You can combine them (for example: black and white, more contrast, sharpen). It is local and not AI: sharpening can't bring back detail that blur removed."
+
+type album struct {
+	gid     string
+	ids     []string
+	caption string
+}

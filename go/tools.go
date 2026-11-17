@@ -662,7 +662,7 @@ func (t *Tools) weatherF(place string, forecast, sun bool) string {
 			reply += line
 		}
 	}
-	reply += "\nPlace matched by name (first result), so check it's the right one. Source: wttr.in with Open-Meteo place search."
+	reply += "\nPlace matched by name (first result), so check it's the right one. Source: wttr.in with place search by Open-Meteo.com (https://open-meteo.com, CC BY 4.0)."
 	t.store(key, reply)
 	t.logf("lookup ok (weather)")
 	return reply
@@ -882,7 +882,7 @@ func sunReply(raw map[string]any, place, name string, t *Tools, key string) stri
 	if !reTime.MatchString(rise) || !reTime.MatchString(set) {
 		return "The weather service gave sun times I couldn't read for that place."
 	}
-	reply := fmt.Sprintf("Sun in %s on %s: sunrise %s, sunset %s (local time there).\nPlace matched by name (first result), so check it's the right one. Source: wttr.in astronomy data with Open-Meteo place search.", name, cleanDate(func() string { s, _ := d["date"].(string); return s }()), rise, set)
+	reply := fmt.Sprintf("Sun in %s on %s: sunrise %s, sunset %s (local time there).\nPlace matched by name (first result), so check it's the right one. Source: wttr.in astronomy data with place search by Open-Meteo.com (https://open-meteo.com, CC BY 4.0).", name, cleanDate(func() string { s, _ := d["date"].(string); return s }()), rise, set)
 	t.store(key, reply)
 	return reply
 }

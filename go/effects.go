@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/math/fixed"
 	"image"
 	"image/color"
 	"image/draw"
 	"image/jpeg"
+	"image/png"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,7 +24,8 @@ import (
 
 type imgOp struct {
 	name string
-	n    int // rotation degrees (clockwise), resize percent, or none
+	n    int    // rotation degrees (clockwise), resize percent, crop numbers, or none
+	s    string // text for caption/watermark, or the output format
 }
 
 var (
@@ -36,12 +41,23 @@ var (
 	reVFlip    = regexp.MustCompile(`(?i)\b(flip (?:it )?(?:vertical|vertically|upside down|top to bottom)|upside[- ]down|flip (?:top|up) (?:to|and) (?:bottom|down))\b`)
 	reCropSq   = regexp.MustCompile(`(?i)\b(crop (?:to )?(?:a )?square|square crop|make (?:it )?square)\b`)
 	reBlur     = regexp.MustCompile(`(?i)\b(blur|blurry|soften|soft focus)\b`)
+	reCropAR   = regexp.MustCompile(`(?i)\bcrop\s+(?:to\s+|at\s+)?(\d{1,2})\s*[:x/]\s*(\d{1,2})\b`)
+	reCropPct  = regexp.MustCompile(`(?i)\bcrop\s+(?:the\s+)?(?:centre|center|middle)\s+(?:to\s+)?(\d{1,2})\s*%`)
+	reCaption  = regexp.MustCompile(`(?i)\b(caption|watermark)\s*[:=]\s*"?([^"\n]{1,60})"?\s*$`)
+	reFormat   = regexp.MustCompile(`(?i)\b(?:convert|change|save|send|export)\b[^.]*?\b(?:to|as|into)\s+(png|jpe?g)\b`)
 	reInvert   = regexp.MustCompile(`(?i)\b(invert|negative|invert colou?rs)\b`)
 )
 
 // parseOps reads the caption. It returns the ops in a fixed safe order and a short list of what it understood.
 func parseOps(caption string) []imgOp {
 	var ops []imgOp
+	var text imgOp
+	if m := reCaption.FindStringSubmatch(caption); m != nil {
+		if t := cleanOverlayText(m[2]); t != "" {
+			text = imgOp{name: strings.ToLower(m[1]), s: t}
+		}
+		caption = caption[:strings.LastIndex(caption, m[0])] // words inside the text never trigger other edits
+	}
 	if m := reRotate.FindStringSubmatch(caption); m != nil {
 		deg := 90
 		w := strings.ToLower(m[1] + m[2] + m[3])
@@ -51,7 +67,7 @@ func parseOps(caption string) []imgOp {
 		case strings.Contains(w, "270") || strings.Contains(w, "left"):
 			deg = 270
 		}
-		ops = append(ops, imgOp{"rotate", deg})
+		ops = append(ops, imgOp{name: "rotate", n: deg})
 	}
 	if m := reResize.FindStringSubmatch(caption); m != nil {
 		pct := 50
@@ -59,42 +75,73 @@ func parseOps(caption string) []imgOp {
 			pct, _ = strconv.Atoi(m[1])
 		}
 		if pct >= 10 && pct <= 200 {
-			ops = append(ops, imgOp{"resize", pct})
+			ops = append(ops, imgOp{name: "resize", n: pct})
 		}
 	}
-	if reCropSq.MatchString(caption) {
-		ops = append(ops, imgOp{"square", 0})
+	if m := reCropAR.FindStringSubmatch(caption); m != nil {
+		a, _ := strconv.Atoi(m[1])
+		b, _ := strconv.Atoi(m[2])
+		if a >= 1 && b >= 1 && a <= 21 && b <= 21 {
+			ops = append(ops, imgOp{name: "cropar", n: a*100 + b})
+		}
+	} else if m := reCropPct.FindStringSubmatch(caption); m != nil {
+		if p, _ := strconv.Atoi(m[1]); p >= 10 && p <= 95 {
+			ops = append(ops, imgOp{name: "croppct", n: p})
+		}
+	} else if reCropSq.MatchString(caption) {
+		ops = append(ops, imgOp{name: "square", n: 0})
 	}
 	if reVFlip.MatchString(caption) {
-		ops = append(ops, imgOp{"vflip", 0})
+		ops = append(ops, imgOp{name: "vflip", n: 0})
 	} else if reFlip.MatchString(caption) {
-		ops = append(ops, imgOp{"mirror", 0})
+		ops = append(ops, imgOp{name: "mirror", n: 0})
 	}
 	switch {
 	case reBW.MatchString(caption):
-		ops = append(ops, imgOp{"bw", 0})
+		ops = append(ops, imgOp{name: "bw", n: 0})
 	case reSepia.MatchString(caption):
-		ops = append(ops, imgOp{"sepia", 0})
+		ops = append(ops, imgOp{name: "sepia", n: 0})
 	}
 	if reBrighter.MatchString(caption) {
-		ops = append(ops, imgOp{"bright", 30})
+		ops = append(ops, imgOp{name: "bright", n: 30})
 	} else if reDarker.MatchString(caption) {
-		ops = append(ops, imgOp{"bright", -30})
+		ops = append(ops, imgOp{name: "bright", n: -30})
 	}
 	if reMoreCon.MatchString(caption) {
-		ops = append(ops, imgOp{"contrast", 130})
+		ops = append(ops, imgOp{name: "contrast", n: 130})
 	} else if reLessCon.MatchString(caption) {
-		ops = append(ops, imgOp{"contrast", 75})
+		ops = append(ops, imgOp{name: "contrast", n: 75})
 	}
 	if reInvert.MatchString(caption) {
-		ops = append(ops, imgOp{"invert", 0})
+		ops = append(ops, imgOp{name: "invert", n: 0})
 	}
 	if reSharpen.MatchString(caption) {
-		ops = append(ops, imgOp{"sharpen", 0})
+		ops = append(ops, imgOp{name: "sharpen", n: 0})
 	} else if reBlur.MatchString(caption) {
-		ops = append(ops, imgOp{"blur", 0})
+		ops = append(ops, imgOp{name: "blur", n: 0})
+	}
+	if text.name != "" {
+		ops = append(ops, text)
+	}
+	if m := reFormat.FindStringSubmatch(caption); m != nil {
+		f := strings.ToLower(m[1])
+		if f == "jpg" {
+			f = "jpeg"
+		}
+		ops = append(ops, imgOp{name: "format", s: f})
 	}
 	return ops
+}
+
+// cleanOverlayText keeps plain printable ASCII (the built-in bitmap font has nothing else), at most 60 characters.
+func cleanOverlayText(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= 32 && r < 127 {
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func describeOps(ops []imgOp) string {
@@ -111,6 +158,16 @@ func describeOps(ops []imgOp) string {
 			p = append(p, "flipped upside down")
 		case "square":
 			p = append(p, "cropped to a centred square")
+		case "cropar":
+			p = append(p, fmt.Sprintf("cropped to %d:%d (centred)", o.n/100, o.n%100))
+		case "croppct":
+			p = append(p, fmt.Sprintf("centre %d%% kept", o.n))
+		case "caption":
+			p = append(p, "caption added below")
+		case "watermark":
+			p = append(p, "text watermark added")
+		case "format":
+			p = append(p, "saved as "+strings.ToUpper(o.s))
 		case "invert":
 			p = append(p, "colours inverted")
 		case "blur":
@@ -177,6 +234,33 @@ func EditImage(data []byte, ops []imgOp) ([]byte, string, error) {
 			sq := image.NewRGBA(image.Rect(0, 0, side, side))
 			draw.Draw(sq, sq.Bounds(), cur, image.Pt(x0, y0), draw.Src)
 			cur = sq
+		case "cropar":
+			cw, ch := cur.Bounds().Dx(), cur.Bounds().Dy()
+			aw, ah := o.n/100, o.n%100
+			tw, th := cw, cw*ah/aw
+			if th > ch {
+				tw, th = ch*aw/ah, ch
+			}
+			if tw < 16 || th < 16 {
+				return nil, "", fmt.Errorf("that crop would be too small")
+			}
+			x0, y0 := (cw-tw)/2, (ch-th)/2
+			cr := image.NewRGBA(image.Rect(0, 0, tw, th))
+			draw.Draw(cr, cr.Bounds(), cur, image.Pt(x0, y0), draw.Src)
+			cur = cr
+		case "croppct":
+			cw, ch := cur.Bounds().Dx(), cur.Bounds().Dy()
+			tw, th := cw*o.n/100, ch*o.n/100
+			if tw < 16 || th < 16 {
+				return nil, "", fmt.Errorf("that crop would be too small")
+			}
+			cr := image.NewRGBA(image.Rect(0, 0, tw, th))
+			draw.Draw(cr, cr.Bounds(), cur, image.Pt((cw-tw)/2, (ch-th)/2), draw.Src)
+			cur = cr
+		case "caption":
+			cur = captionBelow(cur, o.s)
+		case "watermark":
+			watermark(cur, o.s)
 		case "blur":
 			cur = unsharp(cur, 4, -1.0)
 		case "invert":
@@ -198,6 +282,14 @@ func EditImage(data []byte, ops []imgOp) ([]byte, string, error) {
 		}
 	}
 	var buf bytes.Buffer
+	for _, o := range ops {
+		if o.name == "format" && o.s == "png" {
+			if err := png.Encode(&buf, cur); err != nil {
+				return nil, "", fmt.Errorf("I couldn't write the result")
+			}
+			return buf.Bytes(), fmt.Sprintf("%dx%d", cur.Bounds().Dx(), cur.Bounds().Dy()), nil
+		}
+	}
 	if err := jpeg.Encode(&buf, cur, &jpeg.Options{Quality: 92}); err != nil {
 		return nil, "", fmt.Errorf("I couldn't write the result")
 	}
@@ -345,3 +437,99 @@ func orient(m *image.RGBA, o int) *image.RGBA {
 }
 
 var _ = color.RGBA{}
+
+// textImage draws s in the built-in 7x13 bitmap font, scaled up by k, as white-on-transparent mask pixels.
+func overlayText(dst *image.RGBA, s string, x, y, k int, col color.Color) {
+	face := basicfont.Face7x13
+	small := image.NewRGBA(image.Rect(0, 0, 7*len(s)+2, 16))
+	d := &font.Drawer{Dst: small, Src: image.NewUniform(color.White), Face: face, Dot: fixed.P(1, 12)}
+	d.DrawString(s)
+	for yy := 0; yy < small.Bounds().Dy(); yy++ {
+		for xx := 0; xx < small.Bounds().Dx(); xx++ {
+			if small.RGBAAt(xx, yy).A > 0 {
+				draw.Draw(dst, image.Rect(x+xx*k, y+yy*k, x+(xx+1)*k, y+(yy+1)*k), image.NewUniform(col), image.Point{}, draw.Over)
+			}
+		}
+	}
+}
+
+func textScale(w int, s string) int {
+	k := w / 320
+	if k < 1 {
+		k = 1
+	}
+	for k > 1 && (7*len(s)+2)*k > w {
+		k--
+	}
+	return k
+}
+
+// captionBelow adds a white band under the picture with the text centred in black.
+func captionBelow(src *image.RGBA, s string) *image.RGBA {
+	w, h := src.Bounds().Dx(), src.Bounds().Dy()
+	k := textScale(w, s)
+	band := 16*k + 8*k
+	out := image.NewRGBA(image.Rect(0, 0, w, h+band))
+	draw.Draw(out, out.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
+	draw.Draw(out, image.Rect(0, 0, w, h), src, src.Bounds().Min, draw.Src)
+	tx := (w - (7*len(s)+2)*k) / 2
+	if tx < 0 {
+		tx = 0
+	}
+	overlayText(out, s, tx, h+4*k, k, color.Black)
+	return out
+}
+
+// watermark writes the text bottom-right, white with a black shadow, so it reads on light and dark pictures.
+func watermark(m *image.RGBA, s string) {
+	w, h := m.Bounds().Dx(), m.Bounds().Dy()
+	k := textScale(w/2+1, s)
+	tw := (7*len(s) + 2) * k
+	x, y := w-tw-6*k, h-16*k-4*k
+	if x < 0 {
+		x = 0
+	}
+	overlayText(m, s, x+k, y+k, k, color.RGBA{0, 0, 0, 255})
+	overlayText(m, s, x, y, k, color.RGBA{255, 255, 255, 255})
+}
+
+var reCollage = regexp.MustCompile(`(?i)\bcollage\b`)
+
+// Collage joins 2-4 pictures into one grid (2 columns, square centre-cropped cells, white gaps).
+func Collage(pics [][]byte) ([]byte, string, error) {
+	if len(pics) < 2 || len(pics) > 4 {
+		return nil, "", fmt.Errorf("a collage needs 2 to 4 pictures")
+	}
+	const cell, gap = 480, 8
+	cols := 2
+	rows := (len(pics) + 1) / 2
+	if len(pics) == 2 {
+		rows = 1
+	}
+	out := image.NewRGBA(image.Rect(0, 0, cols*cell+(cols+1)*gap, rows*cell+(rows+1)*gap))
+	draw.Draw(out, out.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
+	for i, d := range pics {
+		sq, _, err := EditImage(d, []imgOp{{name: "square"}})
+		if err != nil {
+			return nil, "", err
+		}
+		im, err := jpeg.Decode(bytes.NewReader(sq))
+		if err != nil {
+			return nil, "", fmt.Errorf("I couldn't read one of the pictures")
+		}
+		sc := image.NewRGBA(image.Rect(0, 0, cell, cell))
+		b := im.Bounds()
+		for y := 0; y < cell; y++ { // nearest-neighbour is enough for a thumbnail grid
+			for x := 0; x < cell; x++ {
+				sc.Set(x, y, im.At(b.Min.X+x*b.Dx()/cell, b.Min.Y+y*b.Dy()/cell))
+			}
+		}
+		cx, cy := i%cols, i/cols
+		draw.Draw(out, image.Rect(gap+cx*(cell+gap), gap+cy*(cell+gap), gap+cx*(cell+gap)+cell, gap+cy*(cell+gap)+cell), sc, image.Point{}, draw.Src)
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, out, &jpeg.Options{Quality: 90}); err != nil {
+		return nil, "", fmt.Errorf("I couldn't write the result")
+	}
+	return buf.Bytes(), fmt.Sprintf("%dx%d", out.Bounds().Dx(), out.Bounds().Dy()), nil
+}
