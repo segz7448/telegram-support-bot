@@ -220,7 +220,7 @@ const moon2 = `<html><head><title>Moon - Wikipedia</title></head><body><p>The Mo
 func TestAdversarialParaphrases(t *testing.T) {
 	type tc struct {
 		page, title, q string
-		must, not  []string
+		must, not      []string
 	}
 	cases := []tc{
 		{tfa2, "Wikipedia - Things Fall Apart", "who wrote Things Fall Apart", []string{"Chinua Achebe"}, []string{"Okonkwo", "Igbo"}},
