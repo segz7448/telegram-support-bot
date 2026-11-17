@@ -86,6 +86,7 @@ func main() {
 		} else {
 			chat.Know = &Knowledge{} // disabled: teaching commands explain why, /whoami still works
 		}
+		chat.GH = ct
 		tools.General = true
 		fmt.Fprintln(os.Stderr, "general chat mode (no language model): search + page extraction; search key present:", srch != nil)
 	}

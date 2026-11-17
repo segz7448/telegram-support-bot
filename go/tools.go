@@ -88,6 +88,7 @@ const helpGeneral = "I'm a chat bot running on a phone. I'm not a language model
 	"Dates and time: days until 2026-12-25, what day is 2027-03-01, 30 days from today, time in Tokyo, convert 3 pm New York to Lagos. Dates use UTC unless the owner set a time zone; I say which one I used.\n" +
 	"Calculator script (numbers only, no files or network): calc script: let s = 0; for i = 1 to 10 { s = s + i }; print s\n" +
 	"Designs: quote card: text - Author | poster: Title | Subtitle | Footer | bar chart: Mon=5, Tue=8 title: Sales | line chart / pie chart / banner. Add theme: dark, blue, green, sunset, light or mono. Built-in templates, not Canva.\n" +
+	"GitHub: say e.g. find github repos about weather apps. Public repositories only, GitHub's own relevance order, not a quality or safety check.\n" +
 	"Pictures: send a picture with a caption such as: sharpen, black and white, sepia, brighter, darker, more contrast, rotate right, mirror, resize 50%. Local edits, no AI; sharpening can't restore lost detail.\n" +
 	"Also: units (5 km in miles), money (100 usd to eur), weather in Lagos, define serendipity, wiki Alan Turing.\n" +
 	"The owner can teach me: remember that my wifi name is Blue / forget my wifi name / what do you know. Say whoami to see your Telegram id.\n" +
