@@ -21,7 +21,11 @@ func (f *relFake) GetWithHeaders(u string, hd map[string]string, t int) ([]byte,
 }
 
 func rel(tag string, extra string) string {
-	return fmt.Sprintf(`{"tag_name":"%s","name":"Release %s","draft":false,"prerelease":false,"html_url":"https://evil.test/x","published_at":"2026-11-17T00:00:00Z"%s}`, tag, tag, extra)
+	return relU(tag, "https://github.com/golang/go/releases/tag/"+tag, extra)
+}
+
+func relU(tag, u, extra string) string {
+	return fmt.Sprintf(`{"tag_name":"%s","name":"Release %s","draft":false,"prerelease":false,"html_url":"%s","published_at":"2026-11-17T00:00:00Z"%s}`, tag, tag, u, extra)
 }
 
 func TestReleasesWatchFlow(t *testing.T) {
@@ -48,7 +52,7 @@ func TestReleasesWatchFlow(t *testing.T) {
 	}
 	f.body = rel("v1.1.0", "")
 	out := r.Tick(now.Add(61 * time.Minute))
-	if len(out) != 1 || out[0].Chat != "42" || !strings.Contains(out[0].Text, "v1.1.0") || !strings.Contains(out[0].Text, "https://github.com/golang/go/releases/tag/v1.1.0") || strings.Contains(out[0].Text, "evil.test") {
+	if len(out) != 1 || out[0].Chat != "42" || !strings.Contains(out[0].Text, "v1.1.0") || !strings.Contains(out[0].Text, "https://github.com/golang/go/releases/tag/v1.1.0") {
 		t.Fatalf("announce: %v", out)
 	}
 	if out := r.Tick(now.Add(130 * time.Minute)); len(out) != 0 { // same tag again: no repeat
@@ -58,11 +62,20 @@ func TestReleasesWatchFlow(t *testing.T) {
 	if out := r.Tick(now.Add(200 * time.Minute)); len(out) != 0 {
 		t.Fatalf("prerelease announced: %v", out)
 	}
-	f.body = rel("bad tag!", "")
-	if out := r.Tick(now.Add(270 * time.Minute)); len(out) != 0 {
-		t.Fatalf("odd tag announced: %v", out)
+	f.body = relU("release/2026+rc 1", "https://github.com/golang/go/releases/tag/release%2F2026+rc%201", "")
+	if out := r.Tick(now.Add(270 * time.Minute)); len(out) != 1 || !strings.Contains(out[0].Text, "https://github.com/golang/go/releases/tag/release%2F2026+rc%201") {
+		t.Fatalf("odd tag with encoded url: %v", out)
 	}
-	if x, _ := r.Handle("42", "release watches"); !strings.Contains(x, "golang/go (last seen: v1.1.0)") {
+	for i, bad := range []string{"https://evil.test/golang/go/releases/tag/v9", "http://github.com/golang/go/releases/tag/v9", "https://github.com/other/repo/releases/tag/v9", "https://github.com/golang/go/releases/tag/v8", "https://github.com.evil.test/golang/go/releases/tag/v9", "https://user@github.com/golang/go/releases/tag/v9", "https://github.com/golang/go/releases/tag/v9?x=1"} {
+		f.body = relU("v9", bad, "")
+		out := r.Tick(now.Add(time.Duration(340+140*i) * time.Minute))
+		if len(out) != 1 || strings.Contains(out[0].Text, "evil.test") || strings.Contains(out[0].Text, "other/repo") || strings.Contains(out[0].Text, "releases/tag/v8") || !strings.Contains(out[0].Text, "not showing it") {
+			t.Fatalf("bad url %q: %v", bad, out)
+		}
+		f.body = relU("v10", "https://github.com/golang/go/releases/tag/v10", "")
+		r.Tick(now.Add(time.Duration(410+140*i) * time.Minute))
+	}
+	if x, _ := r.Handle("42", "release watches"); !strings.Contains(x, "golang/go (last seen: v10)") {
 		t.Fatalf("list: %q", x)
 	}
 	if x, _ := r.Handle("42", "unwatch releases of golang/go"); !strings.Contains(x, "Stopped") {

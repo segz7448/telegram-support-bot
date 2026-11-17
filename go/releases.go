@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -43,7 +44,6 @@ var (
 	reRelWatch   = regexp.MustCompile(`(?i)^\s*(?:please\s+)?(?:watch|follow|track)\s+(?:the\s+)?(?:github\s+)?releases?\s+(?:of|for|from|on)\s+(?:https?://github\.com/)?([A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}?)(?:/releases)?/?\s*[.!]?\s*$`)
 	reRelUnwatch = regexp.MustCompile(`(?i)^\s*(?:unwatch|stop watching|stop tracking|unfollow)\s+(?:the\s+)?(?:github\s+)?releases?\s+(?:of|for|from|on)\s+(?:https?://github\.com/)?([A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}?)(?:/releases)?/?\s*[.!]?\s*$`)
 	reRelList    = regexp.MustCompile(`(?i)^\s*(?:release watches|(?:list|show) (?:my )?release watches|what releases (?:am i|are you) (?:watching|tracking))\s*[?.!]?\s*$`)
-	reRelTag     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$`)
 )
 
 func (r *Releases) now() time.Time {
@@ -200,7 +200,7 @@ func (r *Releases) Tick(now time.Time) []NewsSend {
 		return nil
 	}
 	var a relAPI
-	if json.Unmarshal(body, &a) != nil || a.Draft || a.Pre || !reRelTag.MatchString(a.Tag) {
+	if json.Unmarshal(body, &a) != nil || a.Draft || a.Pre || a.Tag == "" || len(a.Tag) > 200 || strings.ContainsAny(a.Tag, "\r\n\x00") {
 		return nil
 	}
 	if w.Seeded && a.Tag == w.LastTag {
@@ -218,6 +218,21 @@ func (r *Releases) Tick(now time.Time) []NewsSend {
 	} else {
 		name = " (" + name + ")"
 	}
-	link := "https://github.com/" + w.Repo + "/releases/tag/" + a.Tag
-	return []NewsSend{{r.Owner, fmt.Sprintf("New release of %s: %s%s.\n%s\n(From GitHub's public API; stable releases only.)", w.Repo, a.Tag, name, link)}}
+	link := "\n" + a.URL
+	if !relURLOK(a.URL, w.Repo, a.Tag) {
+		link = "\n(GitHub's link for this release did not match the repository, so I'm not showing it.)"
+	}
+	return []NewsSend{{r.Owner, fmt.Sprintf("New release of %s: %s%s.%s\n(From GitHub's public API; stable releases only.)", w.Repo, cleanText(a.Tag, 100), name, link)}}
+}
+
+// relURLOK accepts only the exact release page GitHub reports: https, host github.com, no credentials, port,
+// query or fragment, and the path /<watched repo>/releases/tag/<this tag> (compared after decoding). The URL is then
+// shown exactly as returned.
+func relURLOK(raw, repo, tag string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host != "github.com" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	want := "/" + repo + "/releases/tag/" + tag
+	return strings.EqualFold(u.Path, want)
 }
