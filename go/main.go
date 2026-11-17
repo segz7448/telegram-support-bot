@@ -103,6 +103,7 @@ func main() {
 		}
 		chat.GH = ct
 		chat.News = &News{G: ct, Path: os.Getenv("TG_NEWS_FILE"), Owner: strings.TrimSpace(os.Getenv("TG_OWNER_ID"))}
+		chat.Quiz = &Quiz{K: chat.Know}
 		chat.Rem = &Reminders{Path: os.Getenv("TG_REMINDERS_FILE")}
 		chat.Chess = &Chess{Path: os.Getenv("TG_CHESS_FILE")}
 		chat.Games = []GameHandler{chat.Chess, &Connect4{Path: os.Getenv("TG_C4_FILE")}, &Reversi{Path: os.Getenv("TG_REVERSI_FILE")}, &Draughts{Path: os.Getenv("TG_DRAUGHTS_FILE")}, &Ludo{Path: os.Getenv("TG_LUDO_FILE")}, &QR{}}

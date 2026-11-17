@@ -252,6 +252,7 @@ type Chat struct {
 	order  []string
 	Budget time.Duration // total time for search + page fetches
 	Know   *Knowledge    // owner-taught facts (nil = off)
+	Quiz   *Quiz         // quiz over the taught facts (nil = off)
 	GH     GitHubGetter  // keyless public GitHub repository search (nil = off)
 	News   *News         // keyless news headlines and owner daily digest (nil = off)
 	Rem    *Reminders    // in-bot reminders (nil = off)
@@ -410,7 +411,7 @@ var intents = []intent{
 	{"who", []string{"who are you", "what are you", "what is your name", "whats your name", "your name", "who made you", "are you a bot", "are you a robot", "are you human", "are you real", "are you ai", "are you chatgpt", "are you an ai"},
 		[]string{"I'm a Telegram bot running on a phone. I'm not a language model and I don't write original answers: I match your message to things I can do, search the web, read pages, and quote the best passages with their sources."}},
 	{"can", []string{"what can you do", "what do you do", "help me", "how do you work", "what are your features", "what can i ask you", "what can i ask", "how can you help"},
-		[]string{"I can: search the web and quote the most relevant passage from the pages with links; do maths, statistics, percentages, dates and time zones; run small number-only calculator scripts; draw quote cards, posters and charts; show BBC News headlines and send the owner a daily digest; find public GitHub repositories by topic (search results only); edit pictures (sharpen, black and white, sepia, brightness, contrast, rotate, resize); convert units and currencies; give the weather; define words; remember facts the owner teaches me; and chat in a basic way. Send /help for examples. Say \"more\" after an answer for more from the same pages. I can't write essays, poems or code, and I can be wrong, so check the sources."}},
+		[]string{"I can: search the web and quote the most relevant passage from the pages with links; do maths, statistics, percentages, dates and time zones; run small number-only calculator scripts; draw quote cards, posters and charts; show BBC News headlines and send the owner a daily digest; find public GitHub repositories by topic (search results only); make QR codes from text you type; quiz the owner on taught facts (exact-text marking); play chess, Connect Four, Reversi, draughts and Ludo against built-in search programs; edit pictures (sharpen, black and white, sepia, brightness, contrast, rotate, resize); convert units and currencies; give the weather; define words; remember facts the owner teaches me; and chat in a basic way. Send /help for examples. Say \"more\" after an answer for more from the same pages. I can't write essays, poems or code, and I can be wrong, so check the sources."}},
 	{"ok", []string{"ok", "okay", "cool", "nice", "great", "awesome", "alright", "got it", "lol", "haha", "wow", "good"},
 		[]string{"👍 Anything else?", "Okay. Ask away whenever."}},
 	{"sorry", []string{"sorry", "my bad", "apologies", "oops"}, []string{"No problem."}},
@@ -711,6 +712,11 @@ func (c *Chat) Reply(chat, text string) string {
 	}
 	if c.Notes != nil {
 		if r, ok := c.Notes.Handle(chat, text); ok {
+			return r
+		}
+	}
+	if c.Quiz != nil {
+		if r, ok := c.Quiz.Handle(chat, text); ok {
 			return r
 		}
 	}
