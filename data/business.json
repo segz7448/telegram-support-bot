@@ -1,0 +1,6 @@
+{
+"_note": "Fill with REAL information. null = unknown: the bot then says it does not have that information. human_contact: a real contact (email/phone/URL) the bot may give out when someone asks for a person. The bot cannot forward chats to people; it only shares this contact.",
+"human_contact": null,
+"hours": null, "pricing": null, "refund": null, "shipping": null, "order_status": null,
+"contact": null, "account": null, "payment": null
+}

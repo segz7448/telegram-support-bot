@@ -1,0 +1,278 @@
+[
+ {
+  "text": "hey, good to see you",
+  "expect": "greeting",
+  "status": "pass",
+  "actual": "greeting"
+ },
+ {
+  "text": "hiya, got a minute",
+  "expect": "greeting",
+  "status": "pass",
+  "actual": "greeting"
+ },
+ {
+  "text": "hello, thanks for your help",
+  "expect": "greeting+thanks",
+  "status": "pass",
+  "actual": "greeting+thanks"
+ },
+ {
+  "text": "that's exactly what i needed, thanks",
+  "expect": "thanks",
+  "status": "pass",
+  "actual": "thanks"
+ },
+ {
+  "text": "thanks",
+  "expect": "thanks",
+  "status": "pass",
+  "actual": "thanks"
+ },
+ {
+  "text": "this is really annoying",
+  "expect": "complaint",
+  "status": "pass",
+  "actual": "complaint"
+ },
+ {
+  "text": "you are slow and useless",
+  "expect": "complaint",
+  "status": "pass",
+  "actual": "complaint"
+ },
+ {
+  "text": "tell me about the history of rome",
+  "expect": "fallback",
+  "status": "pass",
+  "actual": "fallback"
+ },
+ {
+  "text": "good night",
+  "expect": "goodbye",
+  "status": "pass",
+  "actual": "goodbye"
+ },
+ {
+  "text": "no thanks",
+  "expect": "deny",
+  "status": "pass",
+  "actual": "deny"
+ },
+ {
+  "text": "how can i email you",
+  "expect": "contact",
+  "status": "pass",
+  "actual": "contact"
+ },
+ {
+  "text": "i don't want a refund",
+  "expect": "negation",
+  "status": "pass",
+  "actual": "negation"
+ },
+ {
+  "text": "my card got charged but no order",
+  "expect": "payment",
+  "status": "pass",
+  "actual": "payment"
+ },
+ {
+  "text": "hi what are your hours",
+  "expect": "hours",
+  "status": "pass",
+  "actual": "hours"
+ },
+ {
+  "text": "good morning",
+  "expect": "greeting",
+  "status": "pass",
+  "actual": "greeting"
+ },
+ {
+  "text": "who are you",
+  "expect": "identity",
+  "status": "pass",
+  "actual": "identity"
+ },
+ {
+  "text": "i am not annoyed, thanks",
+  "expect": "thanks",
+  "status": "pass",
+  "actual": "thanks"
+ },
+ {
+  "text": "good job",
+  "expect": "compliment",
+  "status": "pass",
+  "actual": "compliment"
+ },
+ {
+  "text": "bye",
+  "expect": "goodbye",
+  "status": "pass",
+  "actual": "goodbye"
+ },
+ {
+  "text": "what is the capital of spain",
+  "expect": "out_of_scope",
+  "status": "pass",
+  "actual": "out_of_scope"
+ },
+ {
+  "text": "asdf qwer zxcv",
+  "expect": "fallback",
+  "status": "pass",
+  "actual": "fallback"
+ },
+ {
+  "text": "this is not terrible",
+  "expect": "fallback",
+  "status": "pass",
+  "actual": "fallback"
+ },
+ {
+  "text": "the weather is terrible today",
+  "expect": [
+   "out_of_scope",
+   "fallback"
+  ],
+  "status": "pass",
+  "actual": "out_of_scope"
+ },
+ {
+  "text": "what do i call you",
+  "expect": "identity",
+  "status": "pass",
+  "actual": "identity"
+ },
+ {
+  "text": "what questions can i put to you",
+  "expect": "capabilities",
+  "status": "known_fail",
+  "actual": "fallback"
+ },
+ {
+  "text": "my password won't work",
+  "expect": "account",
+  "status": "pass",
+  "actual": "account"
+ },
+ {
+  "text": "do you take mastercard",
+  "expect": "payment",
+  "status": "pass",
+  "actual": "payment"
+ },
+ {
+  "text": "what do you charge for delivery of a large item",
+  "expect": "clarify_delivery_price",
+  "status": "pass",
+  "actual": "clarify_delivery_price"
+ },
+ {
+  "text": "what can you do",
+  "expect": "capabilities",
+  "actual": "capabilities",
+  "status": "pass"
+ },
+ {
+  "text": "how can you help me",
+  "expect": "capabilities",
+  "actual": "capabilities",
+  "status": "pass"
+ },
+ {
+  "text": "hi there, thanks for the quick reply",
+  "expect": "greeting+thanks",
+  "actual": "greeting+thanks",
+  "status": "pass"
+ },
+ {
+  "text": "hello, what are your hours",
+  "expect": "hours",
+  "actual": "hours",
+  "status": "pass"
+ },
+ {
+  "text": "the traffic was awful this morning",
+  "expect": [
+   "fallback",
+   "out_of_scope"
+  ],
+  "actual": "fallback",
+  "status": "pass"
+ },
+ {
+  "text": "i love how terrible the film was",
+  "expect": [
+   "fallback",
+   "out_of_scope"
+  ],
+  "actual": "fallback",
+  "status": "pass"
+ },
+ {
+  "text": "what a terrible day it has been",
+  "expect": [
+   "fallback",
+   "out_of_scope"
+  ],
+  "actual": "fallback",
+  "status": "pass"
+ },
+ {
+  "text": "what should i call you",
+  "expect": "identity",
+  "actual": "identity",
+  "status": "pass"
+ },
+ {
+  "text": "tell me about yourself",
+  "expect": "identity",
+  "actual": "identity",
+  "status": "pass"
+ },
+ {
+  "text": "how much is delivery",
+  "expect": "shipping",
+  "actual": "shipping",
+  "status": "pass"
+ },
+ {
+  "text": "i am so angry about this",
+  "expect": "complaint",
+  "actual": "complaint",
+  "status": "pass"
+ },
+ {
+  "text": "it arrived damaged",
+  "expect": "complaint",
+  "actual": "complaint",
+  "status": "pass"
+ },
+ {
+  "text": "well hello to you",
+  "expect": "greeting",
+  "actual": "greeting",
+  "status": "pass"
+ },
+ {
+  "text": "how's your afternoon going",
+  "expect": "how_are_you",
+  "actual": "how_are_you",
+  "status": "pass"
+ },
+ {
+  "text": "morning",
+  "expect": "greeting",
+  "actual": "greeting",
+  "status": "pass"
+ },
+ {
+  "text": "good evening",
+  "expect": "greeting",
+  "actual": "greeting",
+  "status": "pass"
+ }
+]

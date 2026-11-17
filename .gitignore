@@ -1,0 +1,7 @@
+state.json
+state.json.tmp
+dead_letter.jsonl
+*.token
+token*
+.env
+__pycache__/
