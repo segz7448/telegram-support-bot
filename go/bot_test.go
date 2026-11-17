@@ -368,3 +368,28 @@ func TestRegressions(t *testing.T) {
 	}
 	t.Logf("%d regression cases checked", len(cases))
 }
+
+func TestResolveCurlNoLookPath(t *testing.T) {
+	d := t.TempDir()
+	cp := filepath.Join(d, "curl")
+	os.WriteFile(cp, []byte("#!/bin/sh\n"), 0o755)
+	if got, err := resolveCurlIn("", "relative:"+d, nil); err != nil || got != cp {
+		t.Fatalf("%q %v", got, err)
+	}
+	if got, err := resolveCurlIn("", "", []string{d}); err != nil || got != cp {
+		t.Fatalf("extra dirs: %q %v", got, err)
+	}
+	if got, err := resolveCurlIn(cp, "", nil); err != nil || got != cp {
+		t.Fatal(got, err)
+	}
+	if _, err := resolveCurlIn("curl", "", nil); err == nil {
+		t.Fatal("relative explicit path must be rejected")
+	}
+	os.Chmod(cp, 0o644)
+	if _, err := resolveCurlIn("", d, nil); err == nil {
+		t.Fatal("non-executable must not resolve")
+	}
+	if _, err := resolveCurlIn("", "/nonexistent", nil); err == nil || !strings.Contains(err.Error(), "TG_CURL") {
+		t.Fatal(err)
+	}
+}

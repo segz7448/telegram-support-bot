@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -28,6 +29,11 @@ func main() {
 		return
 	}
 	tok := os.Getenv("TELEGRAM_BOT_TOKEN")
+	if tok == "" && os.Getenv("TG_TOKEN_FILE") != "" { // read directly: no access()/[ -r ] checks, which misreport on Android
+		if raw, err := os.ReadFile(os.Getenv("TG_TOKEN_FILE")); err == nil {
+			tok = strings.TrimSpace(strings.SplitN(string(raw), "\n", 2)[0])
+		}
+	}
 	if !regexp.MustCompile(`^\d{6,}:[A-Za-z0-9_-]{20,}$`).MatchString(tok) {
 		fmt.Fprintln(os.Stderr, "Set TELEGRAM_BOT_TOKEN to a valid bot token.")
 		os.Exit(1)

@@ -44,3 +44,8 @@ Rules/word lists are in `data/rules.json`.
 3. `python3 gen_fixtures.py && (cd go && go test ./... && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ../tgbot-arm64 .)`
 4. Run: `./start.sh` with the token supplied as above (the binary reads model.json and business.json from its own directory). Try without Telegram: `cd go && TGBOT_DIR=.. go run . --console`.
 No token is stored in this repo. Never commit one.
+
+## Android notes (fix for SIGSYS crash)
+- The binary no longer uses `exec.LookPath`/`exec.Command("curl")` name lookup: Android's seccomp kills processes on `faccessat2` (SIGSYS). It resolves curl itself with `stat` over PATH plus `/system/bin` etc., then runs the absolute path. Set `TG_CURL=/system/bin/curl` to pin it.
+- `TG_TOKEN_FILE` is read directly by the binary (and by `start.sh` with `head`, not `[ -r ]`).
+- Checked on a Linux host with `strace -f`: zero access/faccessat calls from the bot process while it spawned curl many times. NOT yet verified on the phone's kernel (4.19.157) itself; Telegram TLS from the phone is also unverified until a live run.

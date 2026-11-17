@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -50,10 +51,43 @@ func cfgEscape(s string) string {
 	return s
 }
 
+// resolveCurl returns an absolute curl path WITHOUT exec.LookPath: on Android, seccomp kills the process
+// (SIGSYS) on the faccessat2 syscall that LookPath uses. We only use stat (fstatat), which is allowed.
+// exec.Command with an absolute path does not call LookPath.
+func resolveCurl(explicit string) (string, error) {
+	return resolveCurlIn(explicit, os.Getenv("PATH"), []string{"/system/bin", "/system/xbin", "/data/data/com.termux/files/usr/bin", "/usr/local/bin", "/usr/bin", "/bin"})
+}
+
+func resolveCurlIn(explicit, pathEnv string, extra []string) (string, error) {
+	isExec := func(p string) bool {
+		fi, err := os.Stat(p)
+		return err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0111 != 0
+	}
+	if explicit != "" {
+		if !filepath.IsAbs(explicit) {
+			return "", fmt.Errorf("curl path must be absolute")
+		}
+		if !isExec(explicit) {
+			return "", fmt.Errorf("curl not found at configured path")
+		}
+		return explicit, nil
+	}
+	dirs := append(strings.Split(pathEnv, ":"), extra...)
+	for _, d := range dirs {
+		if d == "" || !filepath.IsAbs(d) {
+			continue
+		}
+		if p := filepath.Join(d, "curl"); isExec(p) {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("curl not found (set TG_CURL to its absolute path)")
+}
+
 func (c CurlTransport) Post(api, token, method string, params url.Values, timeoutSec int) ([]byte, error) {
-	curl := c.Curl
-	if curl == "" {
-		curl = "curl"
+	curl, err := resolveCurl(c.Curl)
+	if err != nil {
+		return nil, &APIError{Msg: err.Error()}
 	}
 	var cfg bytes.Buffer
 	fmt.Fprintf(&cfg, "url = \"%s\"\n", cfgEscape(api+"/bot"+token+"/"+method))
