@@ -170,6 +170,9 @@ func (t *Tools) Pre(text string) (string, bool) {
 	if r, ok := t.convert(low); ok {
 		return r, true
 	}
+	if r, ok := t.ngHoliday(low); ok {
+		return r, true
+	}
 	if m := reWx.FindStringSubmatch(low); m != nil {
 		return t.weatherF(strings.TrimSpace(m[1]), strings.Contains(low, "forecast")), true
 	}

@@ -258,3 +258,19 @@ func TestWeatherForecastOutlook(t *testing.T) {
 		t.Errorf("plain weather must not carry the outlook: %q", r2)
 	}
 }
+
+func TestNigeriaHolidays(t *testing.T) {
+	tl, _, _ := newFake(t)
+	tl.Now = func() time.Time { return time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC) }
+	r, ok := tl.Pre("public holidays in nigeria")
+	if !ok || !strings.Contains(r, "2026-06-12 Democracy Day") || !strings.Contains(r, "2026-12-25 Christmas Day") || !strings.Contains(r, "(estimated)") || !strings.Contains(r, "MIT licence") {
+		t.Fatalf("list: %q", r)
+	}
+	r, _ = tl.Pre("next holiday in nigeria")
+	if !strings.Contains(r, "Christmas Day, Friday 2026-12-25") {
+		t.Fatalf("next: %q", r)
+	}
+	if r, _ := tl.Pre("nigeria holidays 2031"); !strings.Contains(r, "2026 to 2028") {
+		t.Fatalf("range: %q", r)
+	}
+}
