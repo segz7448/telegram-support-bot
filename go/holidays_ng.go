@@ -62,5 +62,3 @@ var ngHolidays = []ngHoliday{
 	{"2028-12-25", "Christmas Day", false},
 	{"2028-12-26", "Boxing Day", false},
 }
-
-const ngHolidaySource = "Source: the open-source Python \"holidays\" library v0.107 (MIT licence), whose Nigeria rules follow the Public Holidays Act. Dates marked (estimated) are Islamic-calendar estimates: the government announces the real day. The government can also declare extra days, and states may differ, so confirm with an official announcement."
