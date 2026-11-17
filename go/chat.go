@@ -1134,6 +1134,7 @@ func subjectPages(q string, rs []SearchResult) []SearchResult {
 func evaluate(query string, results, srcs []SearchResult, cands []cand) (picked []cand, rest []string, ok bool) {
 	ranked := rank(query, append([]cand(nil), cands...))
 	ranked = requirePredicate(query, cleanTitleOf(srcs), ranked)
+	ranked = shapeGate(query, ranked)
 	minCover := 0.34
 	if nt := len(uniqTerms(query)); nt >= 3 {
 		minCover = 0.6
