@@ -64,6 +64,10 @@ func albumUpdate(id int, gid, caption string) map[string]any {
 }
 
 func runAlbum(t *testing.T, batches [][]map[string]any, steps []time.Duration) *albumT {
+	return runAlbumCfg(t, batches, steps, nil)
+}
+
+func runAlbumCfg(t *testing.T, batches [][]map[string]any, steps []time.Duration, cfg func(*Runner, *albumT)) *albumT {
 	m := image.NewRGBA(image.Rect(0, 0, 60, 60))
 	for i := range m.Pix {
 		m.Pix[i] = uint8(i)
@@ -80,6 +84,9 @@ func runAlbum(t *testing.T, batches [][]map[string]any, steps []time.Duration) *
 	r := &Runner{T: tr, API: "http://x", Token: "TOKEN", Brain: brain(t), StatePath: filepath.Join(d, "s.json"), DeadPath: filepath.Join(d, "dead.jsonl"),
 		Sleep: func(time.Duration) {}, Log: func(string) {}, RateN: 10, RateS: time.Minute, Chat: NewChat(nil, nil, nil, nil, func(string) {}),
 		Clock: func() time.Time { return clk }, AlbumIdle: 2 * time.Second, MaxErrors: 1, PollSec: 20}
+	if cfg != nil {
+		cfg(r, tr)
+	}
 	r.Run()
 	return tr
 }

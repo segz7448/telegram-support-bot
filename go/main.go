@@ -26,13 +26,13 @@ func main() {
 		fmt.Println("tgbot", Version)
 		return
 	}
-	if len(os.Args) > 1 && os.Args[1] == "--show-offset" { // read-only; run only while the bot is stopped
-		off, err := showOffset(dir)
+	if len(os.Args) > 1 && os.Args[1] == "--show-offset" { // strictly read-only; run it only while the bot is stopped
+		off, id, from, err := showOffset(dir, os.Getenv("TG_STATE_FILE"))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "fatal:", err)
 			os.Exit(1)
 		}
-		fmt.Println(off)
+		fmt.Printf("offset=%d bot_id=%s file=%s\n", off, id, from)
 		return
 	}
 	curlPath := os.Getenv("TG_CURL")
@@ -134,13 +134,19 @@ func main() {
 	if chat != nil && chat.Admin != nil {
 		chat.Admin.RatePerMin = rateN
 	}
-	statePath, deadPath, serr := resolveStatePaths(dir, os.Getenv("TG_STATE_FILE"), os.Getenv("TG_DEAD_LETTER_FILE"), func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
+	if i := strings.Index(tok, ":"); i > 0 { // the numeric bot id is not secret; the part after the colon is and is never kept
+		id := tok[:i]
+		if _, e := strconv.Atoi(id); e == nil {
+			stateBotID = id
+		}
+	}
+	statePath, deadPath, serr := resolveStatePaths(dir, stateOpts{ExtState: os.Getenv("TG_STATE_FILE"), ExtDead: os.Getenv("TG_DEAD_LETTER_FILE"), AllowFresh: os.Getenv("TG_STATE_ALLOW_FRESH") == "1", Require: os.Getenv("TG_STATE_REQUIRE_EXISTING") == "1"}, func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
 	if serr != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", serr)
 		os.Exit(1)
 	}
 	r := &Runner{Chat: chat, T: CurlTransport{Curl: curl}, API: api, Token: tok, Brain: b,
-		StatePath: statePath, DeadPath: deadPath,
+		StatePath: statePath, DeadPath: deadPath, QuiesceFile: quiescePath(),
 		Sleep: time.Sleep, Log: func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) },
 		Tools: tools, Heartbeat: 10 * time.Minute, RateN: rateN, RateS: 60 * time.Second}
 	fmt.Println("bot running", Version)
@@ -148,4 +154,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "fatal:", redact(err.Error(), tok))
 		os.Exit(1)
 	}
+}
+
+// quiescePath returns TG_QUIESCE_FILE when it is an absolute path (see Runner.parkIfAsked), else "" (off).
+func quiescePath() string {
+	p := os.Getenv("TG_QUIESCE_FILE")
+	if p != "" && !filepath.IsAbs(p) {
+		fmt.Fprintln(os.Stderr, "fatal: TG_QUIESCE_FILE must be an absolute path")
+		os.Exit(1)
+	}
+	return p
 }

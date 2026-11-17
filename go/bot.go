@@ -291,23 +291,25 @@ func validMessage(u map[string]any) (int64, string, bool) {
 }
 
 type Runner struct {
-	T          Transport
-	API, Token string
-	Brain      *Brain
-	StatePath  string
-	DeadPath   string
-	Sleep      func(time.Duration)
-	Log        func(string)
-	MaxUpdates int // 0 = unlimited
-	MaxErrors  int // 0 = unlimited consecutive-poll-errors (test hook)
-	RateN      int
-	RateS      time.Duration
-	Tools      *Tools           // optional lookups layered over the Brain
-	Chat       *Chat            // optional general chat (rules + web search + extraction, no language model); replaces the Brain-first order
-	PollSec    int              // getUpdates long-poll seconds (0 = 20). Short polls survive mobile links that drop idle connections.
-	Clock      func() time.Time // test hook (nil = time.Now)
-	AlbumIdle  time.Duration    // quiet time before an album is handled (0 = 2s)
-	Heartbeat  time.Duration    // periodic non-secret status line (0 = off)
+	T           Transport
+	API, Token  string
+	Brain       *Brain
+	StatePath   string
+	DeadPath    string
+	Sleep       func(time.Duration)
+	Log         func(string)
+	MaxUpdates  int // 0 = unlimited
+	MaxErrors   int // 0 = unlimited consecutive-poll-errors (test hook)
+	RateN       int
+	RateS       time.Duration
+	Tools       *Tools           // optional lookups layered over the Brain
+	Chat        *Chat            // optional general chat (rules + web search + extraction, no language model); replaces the Brain-first order
+	PollSec     int              // getUpdates long-poll seconds (0 = 20). Short polls survive mobile links that drop idle connections.
+	QuiesceFile string           // optional absolute path; see parkIfAsked
+	ParkSleep   func()           // test hook
+	Clock       func() time.Time // test hook (nil = time.Now)
+	AlbumIdle   time.Duration    // quiet time before an album is handled (0 = 2s)
+	Heartbeat   time.Duration    // periodic non-secret status line (0 = off)
 }
 
 // reply: explicit tool requests first, then the Brain; open questions the Brain could not answer go to lookups.
@@ -361,29 +363,78 @@ func (r *Runner) reply(text, chat string) string {
 
 // loadOffset: missing file = fresh start (0). An unreadable or malformed file is an error: silently
 // restarting from 0 could replay old updates, so the caller must refuse to run.
-func loadOffset(p string) (int, error) {
+// stateBotID is the non-secret numeric bot id (the part of the token before the colon). When set it is written into
+// state.json and checked on load so state from another bot is never reused. Older files without it still load.
+var stateBotID string
+
+type stateFile struct {
+	Offset *int   `json:"offset"`
+	BotID  string `json:"bot_id,omitempty"`
+}
+
+// readState returns the offset and bot id in a state file. A missing file is (0, "", false, nil); a malformed one is an error.
+func readState(p string) (off int, botID string, exists bool, err error) {
 	b, err := os.ReadFile(p)
 	if os.IsNotExist(err) {
-		return 0, nil
+		return 0, "", false, nil
 	}
+	if err != nil {
+		return 0, "", true, err
+	}
+	var s stateFile
+	if json.Unmarshal(b, &s) != nil || s.Offset == nil || *s.Offset < 0 {
+		return 0, "", true, fmt.Errorf("state file %s is malformed; fix or delete it deliberately", p)
+	}
+	return *s.Offset, s.BotID, true, nil
+}
+
+func loadOffset(p string) (int, error) {
+	off, id, _, err := readState(p)
 	if err != nil {
 		return 0, err
 	}
-	var s struct {
-		Offset *int `json:"offset"`
+	if id != "" && stateBotID != "" && id != stateBotID {
+		return 0, fmt.Errorf("state file %s belongs to a different bot (id %s, this bot is %s); refusing to reuse it", p, id, stateBotID)
 	}
-	if json.Unmarshal(b, &s) != nil || s.Offset == nil || *s.Offset < 0 {
-		return 0, fmt.Errorf("state file %s is malformed; fix or delete it deliberately", p)
-	}
-	return *s.Offset, nil
+	return off, nil
 }
 
 func saveOffset(p string, off int) error {
-	b, _ := json.Marshal(map[string]int{"offset": off})
+	b, _ := json.Marshal(stateFile{Offset: &off, BotID: stateBotID})
 	if err := os.WriteFile(p+".tmp", b, 0600); err != nil {
 		return err
 	}
 	return os.Rename(p+".tmp", p)
+}
+
+// parkIfAsked implements a file-based quiesce handshake: when QuiesceFile exists the bot stops polling, writes
+// QuiesceFile+".status" atomically ({"state":"parked","offset":N}) and stays parked (no exit, no polling) until the
+// file is removed. It then resumes. Returns false when the loop should stop (MaxErrors test hook only).
+func (r *Runner) parkIfAsked(offset int) {
+	if r.QuiesceFile == "" {
+		return
+	}
+	if _, err := os.Stat(r.QuiesceFile); err != nil {
+		return
+	}
+	st := r.QuiesceFile + ".status"
+	b, _ := json.Marshal(map[string]any{"state": "parked", "offset": offset, "bot_id": stateBotID})
+	if os.WriteFile(st+".tmp", b, 0600) == nil {
+		os.Rename(st+".tmp", st)
+	}
+	r.Log(fmt.Sprintf("quiesce requested: parked at offset %d (not polling)", offset))
+	for {
+		if _, err := os.Stat(r.QuiesceFile); err != nil {
+			break
+		}
+		if r.ParkSleep != nil {
+			r.ParkSleep()
+		} else {
+			time.Sleep(time.Second)
+		}
+	}
+	os.Remove(st)
+	r.Log("quiesce released: polling resumes")
 }
 
 const maxWait = time.Hour
@@ -480,6 +531,7 @@ func (r *Runner) Run() error {
 				r.Log("reminder sent")
 			}
 		}
+		r.parkIfAsked(offset)
 		ps := pollSec
 		if len(albums) > 0 && ps > 1 {
 			ps = 1 // short poll while an album is still being collected
@@ -683,6 +735,7 @@ func (r *Runner) Run() error {
 				return fmt.Errorf("cannot save state (%v); stopping so no further updates are acknowledged", err)
 			}
 			handled++
+			r.parkIfAsked(offset)
 			if r.MaxUpdates > 0 && handled >= r.MaxUpdates {
 				return nil
 			}

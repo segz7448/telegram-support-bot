@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func wr(t *testing.T, p, s string) {
@@ -15,69 +16,92 @@ func wr(t *testing.T, p, s string) {
 	}
 }
 
+func withBot(id string) func() {
+	old := stateBotID
+	stateBotID = id
+	return func() { stateBotID = old }
+}
+
+var noLog = func(string) {}
+
 func TestStatePathsDefaultUnchanged(t *testing.T) {
+	defer withBot("111")()
 	d := t.TempDir()
-	s, dl, err := resolveStatePaths(d, "", "", func(string) {})
+	s, dl, err := resolveStatePaths(d, stateOpts{}, noLog)
 	if err != nil || s != filepath.Join(d, "state.json") || dl != filepath.Join(d, "dead_letter.jsonl") {
 		t.Fatal(s, dl, err)
+	}
+	// V3 behaviour kept: no state yet is a fresh start, unless REQUIRE is set
+	if _, _, err := resolveStatePaths(d, stateOpts{Require: true}, noLog); err == nil {
+		t.Fatal("require-existing accepted a missing state")
+	}
+	wr(t, filepath.Join(d, "state.json"), `{"offset":7}`)
+	if _, _, err := resolveStatePaths(d, stateOpts{Require: true}, noLog); err != nil {
+		t.Fatal(err)
 	}
 }
 
 func TestStatePathsMigrationPreservesLegacyOffset(t *testing.T) {
+	defer withBot("111")()
 	d, x := t.TempDir(), t.TempDir()
-	wr(t, filepath.Join(d, "state.json"), `{"offset":278262033}`)
+	wr(t, filepath.Join(d, "state.json"), `{"offset":278262033}`) // V3 format: no bot_id
 	wr(t, filepath.Join(d, "dead_letter.jsonl"), "{\"update_id\":1}\n")
 	ext := filepath.Join(x, "state", "state.json")
 	extDead := filepath.Join(x, "state", "dead.jsonl")
-	var logs []string
-	s, dl, err := resolveStatePaths(d, ext, extDead, func(m string) { logs = append(logs, m) })
+	o := stateOpts{ExtState: ext, ExtDead: extDead}
+	s, dl, err := resolveStatePaths(d, o, noLog)
 	if err != nil || s != ext || dl != extDead {
 		t.Fatal(s, dl, err)
 	}
-	if off, err := loadOffset(ext); err != nil || off != 278262033 {
-		t.Fatalf("offset %d %v", off, err)
+	if off, id, _, _ := readState(ext); off != 278262033 || id != "111" {
+		t.Fatalf("offset %d id %q", off, id)
 	}
 	if b, _ := os.ReadFile(extDead); !strings.Contains(string(b), "update_id") {
 		t.Fatal("dead letters not copied")
 	}
-	// legacy untouched
 	if off, _ := loadOffset(filepath.Join(d, "state.json")); off != 278262033 {
 		t.Fatal("legacy changed")
 	}
-	// preserve current: external advances, legacy stale -> a second start keeps the external one
 	saveOffset(ext, 278262100)
-	if _, _, err := resolveStatePaths(d, ext, extDead, func(string) {}); err != nil {
+	if _, _, err := resolveStatePaths(d, o, noLog); err != nil {
 		t.Fatal(err)
 	}
 	if off, _ := loadOffset(ext); off != 278262100 {
 		t.Fatalf("external regressed to %d", off)
 	}
-	// deployment folder deleted: external still there, legacy missing is fine
-	os.RemoveAll(d)
+	os.RemoveAll(d) // deployment folder deleted
 	d2 := t.TempDir()
-	if _, _, err := resolveStatePaths(d2, ext, extDead, func(string) {}); err != nil {
+	if _, _, err := resolveStatePaths(d2, o, noLog); err != nil {
 		t.Fatal(err)
 	}
 	if off, _ := loadOffset(ext); off != 278262100 {
 		t.Fatalf("offset lost: %d", off)
 	}
-	if n, err := showOffsetAt(d2, ext); err != nil || n != 278262100 {
-		t.Fatal(n, err)
+	// V3-compatible: the new file still has a plain "offset" an old binary reads
+	b, _ := os.ReadFile(ext)
+	if !strings.Contains(string(b), `"offset":278262100`) {
+		t.Fatal(string(b))
 	}
 }
 
-func showOffsetAt(dir, ext string) (int, error) {
-	os.Setenv("TG_STATE_FILE", ext)
-	defer os.Unsetenv("TG_STATE_FILE")
-	return showOffset(dir)
-}
-
-func TestStatePathsLegacyAheadWinsAndMalformedFailsClosed(t *testing.T) {
+func TestStatePathsFailClosed(t *testing.T) {
+	defer withBot("111")()
 	d, x := t.TempDir(), t.TempDir()
 	ext := filepath.Join(x, "state.json")
+	o := stateOpts{ExtState: ext}
+	// both absent: refused (vanished production state is not a new install), allowed only when declared fresh
+	if _, _, err := resolveStatePaths(d, o, noLog); err == nil {
+		t.Fatal("both absent accepted")
+	}
+	if _, _, err := resolveStatePaths(d, stateOpts{ExtState: ext, AllowFresh: true}, noLog); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ext); err == nil {
+		t.Fatal("fresh start wrote a file before any update")
+	}
 	wr(t, filepath.Join(d, "state.json"), `{"offset":500}`)
 	wr(t, ext, `{"offset":100}`)
-	if _, _, err := resolveStatePaths(d, ext, "", func(string) {}); err != nil {
+	if _, _, err := resolveStatePaths(d, o, noLog); err != nil {
 		t.Fatal(err)
 	}
 	if off, _ := loadOffset(ext); off != 500 {
@@ -85,32 +109,105 @@ func TestStatePathsLegacyAheadWinsAndMalformedFailsClosed(t *testing.T) {
 	}
 	for _, bad := range []string{`not json`, `{}`, `{"offset":-5}`} {
 		wr(t, ext, bad)
-		if _, _, err := resolveStatePaths(d, ext, "", func(string) {}); err == nil {
+		if _, _, err := resolveStatePaths(d, o, noLog); err == nil {
 			t.Fatalf("malformed external accepted: %s", bad)
 		}
 	}
 	wr(t, ext, `{"offset":600}`)
 	wr(t, filepath.Join(d, "state.json"), `garbage`)
-	if _, _, err := resolveStatePaths(d, ext, "", func(string) {}); err == nil {
+	if _, _, err := resolveStatePaths(d, o, noLog); err == nil {
 		t.Fatal("malformed legacy accepted")
 	}
-	if _, _, err := resolveStatePaths(d, "relative/state.json", "", func(string) {}); err == nil {
+	if _, _, err := resolveStatePaths(d, stateOpts{ExtState: "relative/s.json"}, noLog); err == nil {
 		t.Fatal("relative path accepted")
 	}
-	// neither exists: fresh start, no error
-	if _, _, err := resolveStatePaths(t.TempDir(), filepath.Join(t.TempDir(), "s.json"), "", func(string) {}); err != nil {
-		t.Fatal(err)
+}
+
+func TestStatePathsRejectOtherBot(t *testing.T) {
+	defer withBot("111")()
+	d, x := t.TempDir(), t.TempDir()
+	ext := filepath.Join(x, "state.json")
+	wr(t, ext, `{"offset":9,"bot_id":"222"}`)
+	if _, _, err := resolveStatePaths(d, stateOpts{ExtState: ext}, noLog); err == nil || !strings.Contains(err.Error(), "different bot") {
+		t.Fatalf("external from another bot accepted: %v", err)
 	}
-	// the flow after resolving: the Runner reads and writes the external file
-	d3, x3 := t.TempDir(), t.TempDir()
-	wr(t, filepath.Join(d3, "state.json"), `{"offset":42}`)
-	e3 := filepath.Join(x3, "s.json")
-	sp, _, _ := resolveStatePaths(d3, e3, "", func(string) {})
-	if off, _ := loadOffset(sp); off != 42 {
-		t.Fatal(off)
+	wr(t, ext, `{"offset":9,"bot_id":"111"}`)
+	wr(t, filepath.Join(d, "state.json"), `{"offset":50,"bot_id":"222"}`)
+	if _, _, err := resolveStatePaths(d, stateOpts{ExtState: ext}, noLog); err == nil {
+		t.Fatal("legacy from another bot merged")
 	}
-	saveOffset(sp, 43)
-	if off, _ := loadOffset(filepath.Join(d3, "state.json")); off != 42 {
-		t.Fatal("legacy was written")
+	// same check on the default path and in loadOffset
+	if _, _, err := resolveStatePaths(d, stateOpts{}, noLog); err == nil {
+		t.Fatal("default path accepted another bot's state")
 	}
+	if _, err := loadOffset(filepath.Join(d, "state.json")); err == nil {
+		t.Fatal("loadOffset accepted another bot's state")
+	}
+}
+
+func TestShowOffsetIsReadOnly(t *testing.T) {
+	d, x := t.TempDir(), t.TempDir()
+	wr(t, filepath.Join(d, "state.json"), `{"offset":77}`)
+	ext := filepath.Join(x, "new", "state.json") // does not exist; its folder does not exist either
+	off, _, from, err := showOffset(d, ext)
+	if err != nil || off != 77 || from != filepath.Join(d, "state.json") {
+		t.Fatal(off, from, err)
+	}
+	if _, err := os.Stat(filepath.Join(x, "new")); err == nil {
+		t.Fatal("show-offset created a folder")
+	}
+	if _, err := os.Stat(ext); err == nil {
+		t.Fatal("show-offset created the external file")
+	}
+	wr(t, ext, `{"offset":90,"bot_id":"5"}`)
+	before, _ := os.ReadFile(filepath.Join(d, "state.json"))
+	off, id, _, _ := showOffset(d, ext)
+	after, _ := os.ReadFile(filepath.Join(d, "state.json"))
+	if off != 90 || id != "5" || string(before) != string(after) {
+		t.Fatal(off, id)
+	}
+	if _, _, _, err := showOffset(t.TempDir(), ""); err == nil {
+		t.Fatal("missing state not reported")
+	}
+}
+
+func TestQuiesceParksAndResumesWithoutPolling(t *testing.T) {
+	defer withBot("111")()
+	s := time.Second
+	d := t.TempDir()
+	q := filepath.Join(d, "quiesce")
+	wr(t, q, "")
+	tr := runAlbumCfg(t, [][]map[string]any{{albumUpdate(1, "", "sepia")}, {}}, []time.Duration{s, s}, func(r *Runner, tr *albumT) {
+		r.QuiesceFile = q
+		polls := 0
+		r.ParkSleep = func() {
+			polls++
+			// while parked: no getUpdates may have happened, status must be on disk
+			if n := countCalls(tr, "getUpdates"); n != 0 {
+				t.Errorf("polled while parked: %d", n)
+			}
+			if b, err := os.ReadFile(q + ".status"); err != nil || !strings.Contains(string(b), `"parked"`) || !strings.Contains(string(b), `"offset":0`) {
+				t.Errorf("status %q %v", b, err)
+			}
+			if polls == 3 {
+				os.Remove(q) // resume
+			}
+		}
+	})
+	if countCalls(tr, "getUpdates") == 0 || tr.photos != 1 {
+		t.Fatalf("did not resume: %v %d", tr.calls, tr.photos)
+	}
+	if _, err := os.Stat(q + ".status"); err == nil {
+		t.Fatal("status left behind after resume")
+	}
+}
+
+func countCalls(a *albumT, m string) int {
+	n := 0
+	for _, c := range a.calls {
+		if c == m {
+			n++
+		}
+	}
+	return n
 }
