@@ -39,6 +39,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "--selftest-search" {
+		if !SelfTestSearch(tools, curlPath) {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--console" {
 		sc := bufio.NewScanner(os.Stdin)
 		for fmt.Print("you> "); sc.Scan(); fmt.Print("you> ") {
