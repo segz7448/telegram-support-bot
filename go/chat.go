@@ -251,6 +251,7 @@ type Chat struct {
 	hist   map[string]*convo
 	order  []string
 	Budget time.Duration // total time for search + page fetches
+	Know   *Knowledge    // owner-taught facts (nil = off)
 }
 
 func NewChat(s, w Searcher, pf PageFetcher, res *Resolver, log func(string)) *Chat {
@@ -655,7 +656,7 @@ func rerankResults(q string, rs []SearchResult) []SearchResult {
 	score := func(r SearchResult) float64 {
 		tt := terms(cleanTitle(r.Title))
 		if len(tt) == 0 {
-			return 0
+			return sourceBonus(r.URL)
 		}
 		in := 0
 		for _, t := range tt {
@@ -664,7 +665,7 @@ func rerankResults(q string, rs []SearchResult) []SearchResult {
 			}
 		}
 		// all title words in the question, and few extra title words, is best
-		return float64(in)/float64(len(tt)) + 0.2*float64(in)
+		return float64(in)/float64(len(tt)) + 0.2*float64(in) + sourceBonus(r.URL)
 	}
 	out := append([]SearchResult(nil), rs...)
 	sort.SliceStable(out, func(a, b int) bool { return score(out[a]) > score(out[b]) })
@@ -688,6 +689,14 @@ const srcNote = "Quoted from the web (untrusted, may be wrong):"
 // Reply answers one message. It never returns an empty string.
 func (c *Chat) Reply(chat, text string) string {
 	text = strings.TrimSpace(text)
+	if c.Know != nil {
+		if r, ok := c.Know.Handle(chat, text); ok {
+			return r
+		}
+		if r, ok := c.Know.Lookup(chat, text); ok {
+			return r
+		}
+	}
 	st := c.state(chat)
 	low := strings.ToLower(text)
 	if _, r, ok := smallTalk(low); ok {
@@ -844,7 +853,7 @@ var reRefNoise = regexp.MustCompile(`(?i)↑|\^|archived (from|at|on)|retrieved 
 // goodSentence keeps prose and drops footnotes, reference-list lines, list fragments and page chrome.
 func goodSentence(s string) bool {
 	n := len([]rune(s))
-	if n < 40 || n > 650 || reJunk.MatchString(s) || reRefNoise.MatchString(s) {
+	if n < 40 || n > 420 || reJunk.MatchString(s) || reRefNoise.MatchString(s) {
 		return false
 	}
 	words := strings.Fields(s)
@@ -939,10 +948,19 @@ func requirePredicate(query, title string, ranked []cand) []cand {
 		howAttr[stemW(m[1])] = true // "how far": the word "far" alone ("far side") is not an answer
 	}
 	needNum := reQty.MatchString(strings.ToLower(query))
+	if isWhere(query) && locOnly(pred) {
+		var loc []cand
+		for _, c := range ranked {
+			if reWhere.MatchString(c.text) {
+				loc = append(loc, c)
+			}
+		}
+		return loc
+	}
 	var out []cand
 	for _, c := range ranked {
-		if needNum && !reDigit.MatchString(c.text) {
-			continue // a quantity question is answered by a sentence with a number
+		if needNum && !hasQuantity(c.text, query) {
+			continue // a quantity question is answered by a sentence with a real number (not an ordinal, century or year)
 		}
 		have := map[string]bool{}
 		for _, t := range terms(c.text) {
@@ -959,7 +977,84 @@ func requirePredicate(query, title string, ranked []cand) []cand {
 			}
 		}
 	}
+	if reWhenQ.MatchString(strings.ToLower(strings.TrimSpace(query))) {
+		var dated []cand
+		for _, c := range out {
+			if reYearish.MatchString(c.text) || reDigit.MatchString(c.text) && regexp.MustCompile(`(?i)\b(century|decade|ago)\b`).MatchString(c.text) {
+				dated = append(dated, c) // a "when" answer must contain a date, year or period
+			}
+		}
+		out = dated
+		// "when was X built": a sentence whose date sits with the verb beats one that only mentions the name
+		mx := 0.0
+		for _, c := range out {
+			if c.cover > mx {
+				mx = c.cover
+			}
+		}
+		strong := func(c cand) bool { return c.cover >= mx*0.75 }
+		sort.SliceStable(out, func(a, b int) bool {
+			if strong(out[a]) != strong(out[b]) {
+				return strong(out[a])
+			}
+			if !strong(out[a]) {
+				return false
+			}
+			return whenScore(out[a].text) > whenScore(out[b].text)
+		})
+	}
 	return out
+}
+
+var (
+	reWhenQ   = regexp.MustCompile(`^(when|what year|in what year|what date)\b`)
+	reYearish = regexp.MustCompile(`\b(1[0-9]{3}|20[0-9]{2})\b|\b(January|February|March|April|May|June|July|August|September|October|November|December)\b`)
+	reNameOf  = regexp.MustCompile(`(?i)\b(named (?:after|for)|nickname|derives? its name|the name\b|is called)\b`)
+	reWhere   = regexp.MustCompile(`\b(in|near|on|at|within|beside|between|of)\s+(?:the\s+)?[A-Z][\p{L}'-]+|\b(located|situated|stands|lies|based|capital of)\b`)
+	reOrdinal = regexp.MustCompile(`(?i)\b\d+(?:st|nd|rd|th)\b|\b\d+(?:st|nd|rd|th)?[- ]century\b|\b(1[0-9]{3}|20[0-9]{2})\b`)
+	reBigNum  = regexp.MustCompile(`(?i)\b\d{1,3}(?:,\d{3})+\b|\b\d+(?:\.\d+)?\s*(?:million|billion|thousand|trillion)\b|\b\d{5,}\b`)
+	rePopQ    = regexp.MustCompile(`(?i)\b(population|people live|inhabitants|residents|how many people)\b`)
+)
+
+func whenScore(s string) int {
+	sc := 0
+	if reYearish.MatchString(s) {
+		sc += 2
+	}
+	if reNameOf.MatchString(s) {
+		sc -= 3
+	}
+	return sc
+}
+
+func isWhere(q string) bool {
+	return regexp.MustCompile(`(?i)^\s*where\b`).MatchString(q)
+}
+
+func locOnly(pred []string) bool {
+	ok := map[string]bool{"located": true, "situated": true, "found": true, "based": true, "place": true, "location": true, "locate": true, "lie": true, "lies": true, "stand": true, "stands": true, "built": false}
+	for _, p := range pred {
+		if !ok[p] && !ok[stemW(p)] {
+			return false
+		}
+	}
+	return len(pred) > 0
+}
+
+// hasQuantity: a count/amount question needs a real number. Ordinals ("15th century") and years do not count
+// unless the question is itself about a year, and population questions need a large figure.
+func hasQuantity(text, query string) bool {
+	t := text
+	if !regexp.MustCompile(`(?i)\b(year|when|age|old)\b`).MatchString(query) {
+		t = reOrdinal.ReplaceAllString(t, " ")
+	}
+	if !reDigit.MatchString(t) {
+		return false
+	}
+	if rePopQ.MatchString(query) {
+		return reBigNum.MatchString(t)
+	}
+	return true
 }
 
 // fitSentences joins whole sentences up to max characters; it never cuts a sentence in half.
@@ -1180,4 +1275,29 @@ func hasWhoVerb(lq, text string) bool {
 		}
 	}
 	return false
+}
+
+// sourceBonus ranks result hosts: reference and official sites up, social/user-generated/travel-listing sites down.
+// It only reorders; it never hides a result and it is not a claim that a site is correct.
+func sourceBonus(u string) float64 {
+	h := strings.TrimPrefix(strings.ToLower(hostOf(u)), "www.")
+	has := func(list ...string) bool {
+		for _, x := range list {
+			if h == x || strings.HasSuffix(h, "."+x) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("facebook.com", "instagram.com", "tiktok.com", "twitter.com", "x.com", "pinterest.com", "linkedin.com", "youtube.com", "threads.net"):
+		return -3
+	case has("quora.com", "reddit.com", "answers.com", "yahoo.com", "tripadvisor.com", "tripadvisor.co.uk", "booking.com", "expedia.com", "viator.com", "getyourguide.com"):
+		return -1.5
+	case has("wikipedia.org", "britannica.com", "nasa.gov", "who.int", "nih.gov", "cdc.gov", "noaa.gov", "un.org", "worldbank.org", "nationalgeographic.com", "nature.com", "sciencemag.org", "bbc.com", "bbc.co.uk", "reuters.com", "apnews.com", "oxfordreference.com", "merriam-webster.com", "dictionary.com", "smithsonianmag.com", "history.com"):
+		return 0.6
+	case strings.HasSuffix(h, ".gov") || strings.HasSuffix(h, ".edu") || strings.HasSuffix(h, ".gov.uk") || strings.HasSuffix(h, ".ac.uk") || strings.HasSuffix(h, ".gov.ng") || strings.HasSuffix(h, ".edu.ng"):
+		return 0.5
+	}
+	return 0
 }

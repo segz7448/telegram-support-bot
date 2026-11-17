@@ -75,6 +75,11 @@ func main() {
 			srch = &TavilySearch{P: ct, KeyFile: kf, CountFile: os.Getenv("TG_SEARCH_STATE_FILE")}
 		}
 		chat = NewChat(srch, WikiSearch{T: tools}, ct, NewResolver(ct), func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
+		if kf := os.Getenv("TG_KNOWLEDGE_FILE"); kf != "" && os.Getenv("TG_OWNER_ID") != "" {
+			chat.Know = &Knowledge{Path: kf, Owner: strings.TrimSpace(os.Getenv("TG_OWNER_ID"))}
+		} else {
+			chat.Know = &Knowledge{} // disabled: teaching commands explain why, /whoami still works
+		}
 		tools.General = true
 		fmt.Fprintln(os.Stderr, "general chat mode (no language model): search + page extraction; search key present:", srch != nil)
 	}

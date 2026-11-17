@@ -349,3 +349,92 @@ func TestQuotaStateFailsClosed(t *testing.T) {
 		t.Fatal("network call made despite bad state")
 	}
 }
+
+func TestTeachRememberForgetOwnerOnly(t *testing.T) {
+	dir := t.TempDir()
+	k := &Knowledge{Path: dir + "/k.json", Owner: "42"}
+	c, _, _ := newTestChat(&fakeS{}, nil, nil)
+	c.Know = k
+	if r := c.Reply("42", "remember that my wifi name is BlueHouse"); !strings.Contains(r, "remember") {
+		t.Fatal(r)
+	}
+	if r := c.Reply("42", "what is my wifi name?"); !strings.Contains(r, "BlueHouse") || !strings.Contains(r, "From what you taught me") {
+		t.Fatal(r)
+	}
+	// stranger cannot teach, read, or change
+	if r := c.Reply("99", "remember that the sky is green"); !strings.Contains(r, "Only the bot owner") {
+		t.Fatal(r)
+	}
+	if r := c.Reply("99", "what is my wifi name?"); strings.Contains(r, "BlueHouse") {
+		t.Fatalf("leaked: %s", r)
+	}
+	if r := c.Reply("99", "forget all confirm"); !strings.Contains(r, "Only the bot owner") {
+		t.Fatal(r)
+	}
+	// correction overwrites
+	c.Reply("42", "correct: my wifi name is RedHouse")
+	if r := c.Reply("42", "what is my wifi name"); !strings.Contains(r, "RedHouse") || strings.Contains(r, "BlueHouse") {
+		t.Fatal(r)
+	}
+	// a fact about Nigeria must not answer a different question about Nigeria
+	c.Reply("42", "remember that Nigeria is my favourite country")
+	if r := c.Reply("42", "what is the capital of Nigeria"); strings.Contains(r, "From what you taught me") {
+		t.Fatalf("wrong memory hit: %s", r)
+	}
+	// secrets are refused
+	if r := c.Reply("42", "remember that my bank password is hunter2"); !strings.Contains(r, "won't store") {
+		t.Fatal(r)
+	}
+	if r := c.Reply("42", "remember that my key is 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ0123456789"); !strings.Contains(r, "won't store") {
+		t.Fatal(r)
+	}
+	if r := c.Reply("42", "what do you know"); !strings.Contains(r, "RedHouse") {
+		t.Fatal(r)
+	}
+	if r := c.Reply("42", "forget my wifi name"); !strings.Contains(r, "Forgot 1") {
+		t.Fatal(r)
+	}
+	if r := c.Reply("42", "what is my wifi name"); strings.Contains(r, "RedHouse") {
+		t.Fatal(r)
+	}
+	// forget all needs confirmation
+	if r := c.Reply("42", "forget all"); !strings.Contains(r, "confirm") {
+		t.Fatal(r)
+	}
+	if r := c.Reply("42", "forget all confirm"); !strings.Contains(r, "Forgot all") {
+		t.Fatal(r)
+	}
+	// disabled when not configured
+	c.Know = &Knowledge{}
+	if r := c.Reply("42", "remember that a is b"); !strings.Contains(r, "switched off") {
+		t.Fatal(r)
+	}
+	if r := c.Reply("42", "whoami"); !strings.Contains(r, "42") {
+		t.Fatal(r)
+	}
+	// corrupt file fails closed and is not overwritten
+	_ = os.WriteFile(dir+"/bad.json", []byte("junk"), 0o600)
+	c.Know = &Knowledge{Path: dir + "/bad.json", Owner: "42"}
+	if r := c.Reply("42", "remember that x is y"); !strings.Contains(r, "can't read") {
+		t.Fatal(r)
+	}
+	if b, _ := os.ReadFile(dir + "/bad.json"); string(b) != "junk" {
+		t.Fatal("corrupt file was overwritten")
+	}
+}
+
+func TestSourceBonusOrdersReferenceAboveSocial(t *testing.T) {
+	rs := []SearchResult{
+		{Title: "Mount Kilimanjaro - Facebook", URL: "https://www.facebook.com/x"},
+		{Title: "Kilimanjaro tours", URL: "https://www.tripadvisor.com/y"},
+		{Title: "Mount Kilimanjaro", URL: "https://en.wikipedia.org/wiki/Mount_Kilimanjaro"},
+		{Title: "Mount Kilimanjaro", URL: "https://www.britannica.com/place/Mount-Kilimanjaro"},
+	}
+	out := rerankResults("how tall is Mount Kilimanjaro", rs)
+	if !strings.Contains(out[0].URL, "wikipedia") && !strings.Contains(out[0].URL, "britannica") {
+		t.Fatalf("%v", out)
+	}
+	if !strings.Contains(out[len(out)-1].URL, "facebook") {
+		t.Fatalf("social not last: %v", out)
+	}
+}

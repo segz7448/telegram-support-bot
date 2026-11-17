@@ -171,6 +171,14 @@ type Runner struct {
 // reply: explicit tool requests first, then the Brain; open questions the Brain could not answer go to lookups.
 func (r *Runner) reply(text, chat string) string {
 	if r.Chat != nil && r.Tools != nil {
+		if r.Chat.Know != nil {
+			if rep, ok := r.Chat.Know.Handle(chat, strings.TrimSpace(text)); ok {
+				return rep
+			}
+		}
+		if rep, ok := Compute(text, time.Now()); ok {
+			return rep
+		}
 		if rep, ok := r.Tools.Command(text); ok {
 			return rep
 		}
