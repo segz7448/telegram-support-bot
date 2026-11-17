@@ -66,7 +66,7 @@ func main() {
 		ct := CurlTransport{Curl: curl}
 		var srch Searcher
 		if kf := os.Getenv("TG_SEARCH_KEY_FILE"); kf != "" {
-			srch = &TavilySearch{P: ct, KeyFile: kf}
+			srch = &TavilySearch{P: ct, KeyFile: kf, CountFile: filepath.Join(dir, "search_count.txt")}
 		}
 		chat = NewChat(srch, WikiSearch{T: tools}, ct, NewResolver(ct), func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
 		tools.General = true

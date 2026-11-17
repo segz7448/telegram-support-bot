@@ -93,3 +93,12 @@ No pretrained model, local or hosted, is used. Chat is rules plus retrieval, ena
 Wikipedia, and checks that private/IP-literal targets are refused. Prints OK/FAIL lines and exits non-zero on failure.
 Search is Wikipedia-only without a search key: encyclopedia questions work; news, prices and local queries do not (no general web search yet).
 Privacy note for any hosted search API: queries leave the phone. Tavily's Platform Terms license submitted inputs to Tavily for improving its services and AI training.
+
+### Search key (Tavily, free plan) - set up only after the owner approves
+Set `TG_SEARCH_KEY_FILE=/path/to/file` (key alone on the first line, chmod 600, never in the repo or logs). Requests send only the question text
+(basic depth, 5 results, `include_answer:false`, so Tavily's own AI answer is not used). A persistent counter `search_count.txt` in TGBOT_DIR stops at
+900 searches per calendar month (free plan is 1,000 credits; a basic search costs 1) and there is also a 30/day cap. On any search failure the bot
+falls back to keyless Wikipedia, then to an honest "couldn't find". Tavily's terms allow it to keep queries and use them to improve its services and AI.
+### Credit and current-office questions
+"Who is the president/CEO of X" is answered only by a sentence that names a person AND says current/incumbent; otherwise the bot abstains.
+"Who invented/wrote/discovered..." reads two pages and, if sentences credit different people, shows both with a disagreement notice.

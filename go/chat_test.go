@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -252,5 +253,79 @@ func TestAbstainsWhenNoSentenceSupportsAttribute(t *testing.T) {
 	c, _, _ := newTestChat(s, map[string]PageResult{"https://example.com/p": page("<p>The Moon is Earth's only natural satellite and it has been studied by many missions over the years.</p><p>From a distance, the day and night phases of the lunar day are visible as the lunar phases to observers.</p>")}, map[string]string{"example.com": "93.184.216.34"})
 	if got := c.Reply("1", "how far is the moon from earth"); !strings.Contains(got, "won't guess") {
 		t.Fatalf("should abstain: %q", got)
+	}
+}
+
+func TestOfficeQuestionNeedsNamedCurrentHolder(t *testing.T) {
+	def := `<p>The president of Nigeria, officially the president of the Federal Republic of Nigeria, is the head of state and head of government of the country.</p><p>The office was established in 1963 under the first republican constitution of the country.</p>`
+	s := &fakeS{res: []SearchResult{{Title: "Wikipedia - President of Nigeria", URL: "https://example.com/p", Snippet: "x"}}}
+	c, _, _ := newTestChat(s, map[string]PageResult{"https://example.com/p": page(def)}, map[string]string{"example.com": "93.184.216.34"})
+	if got := c.Reply("1", "who is the president of Nigeria"); !strings.Contains(got, "currently holds") {
+		t.Fatalf("should abstain on office definition: %q", got)
+	}
+	withName := def + `<p>The incumbent president of Nigeria is Ada Okafor, who took office in 2023 after the general election.</p>`
+	c2, _, _ := newTestChat(s, map[string]PageResult{"https://example.com/p": page(withName)}, map[string]string{"example.com": "93.184.216.34"})
+	if got := c2.Reply("1", "who is the president of Nigeria"); !strings.Contains(got, "Ada Okafor") {
+		t.Fatalf("should quote named holder: %q", got)
+	}
+}
+
+func TestDifferentPeopleAreShownAsDisagreement(t *testing.T) {
+	pg := `<p>Alexander Bell has most often been credited as the inventor of the first practical telephone in the year 1876.</p><p>A communication device for sailing vessels called telephone was invented by Captain John Taylor in 1844.</p>`
+	s := &fakeS{res: []SearchResult{{Title: "Wikipedia - Telephone", URL: "https://example.com/p", Snippet: "x"}}}
+	c, _, _ := newTestChat(s, map[string]PageResult{"https://example.com/p": page(pg)}, map[string]string{"example.com": "93.184.216.34"})
+	got := c.Reply("1", "who invented the telephone")
+	if !strings.Contains(got, "different people") || !strings.Contains(got, "Bell") || !strings.Contains(got, "Taylor") {
+		t.Fatalf("%q", got)
+	}
+}
+
+type fakePoster struct {
+	body    []byte
+	status  int
+	gotURL  string
+	gotAuth string
+	gotBody string
+	calls   int
+}
+
+func (f *fakePoster) PostJSON(u string, h map[string]string, b []byte, _ int) ([]byte, int, error) {
+	f.calls++
+	f.gotURL, f.gotAuth, f.gotBody = u, h["Authorization"], string(b)
+	return f.body, f.status, nil
+}
+
+func TestTavilyRequestShapeQuotaAndUnsafeResults(t *testing.T) {
+	dir := t.TempDir()
+	kf := dir + "/key"
+	_ = os.WriteFile(kf, []byte("tvly-TESTKEY\n"), 0o600)
+	fp := &fakePoster{status: 200, body: []byte(`{"results":[{"title":"A","url":"https://example.com/a","content":"alpha"},{"title":"B","url":"http://127.0.0.1/x","content":"bad"},{"title":"C","url":"https://10.0.0.1/x","content":"bad"}]}`)}
+	ts := &TavilySearch{P: fp, KeyFile: kf, CountFile: dir + "/count", MonthlyCap: 2}
+	rs, err := ts.Search("what is photosynthesis")
+	if err != nil || len(rs) != 1 || rs[0].URL != "https://example.com/a" {
+		t.Fatalf("%v %v", rs, err)
+	}
+	if fp.gotURL != "https://api.tavily.com/search" || fp.gotAuth != "Bearer tvly-TESTKEY" {
+		t.Fatalf("%q %q", fp.gotURL, fp.gotAuth)
+	}
+	if !strings.Contains(fp.gotBody, `"include_answer":false`) || !strings.Contains(fp.gotBody, `"search_depth":"basic"`) || strings.Contains(fp.gotBody, "TESTKEY") {
+		t.Fatalf("body %s", fp.gotBody)
+	}
+	if _, err := ts.Search("q2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ts.Search("q3"); err == nil || fp.calls != 2 {
+		t.Fatalf("monthly cap not enforced: calls=%d err=%v", fp.calls, err)
+	}
+	missing := &TavilySearch{P: fp, KeyFile: dir + "/nokey"}
+	if _, err := missing.Search("x"); err == nil {
+		t.Fatal("missing key must fail")
+	}
+}
+
+func TestTavilyFailureFallsBackToWikipediaOrAbstains(t *testing.T) {
+	c, _, _ := newTestChat(&fakeS{err: fmt.Errorf("search service returned 429")}, nil, nil)
+	if got := c.Reply("1", "who is the mayor of Lagos"); !strings.Contains(got, "couldn't find") {
+		t.Fatalf("%q", got)
 	}
 }

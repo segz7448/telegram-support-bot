@@ -75,8 +75,35 @@ type TavilySearch struct {
 	KeyFile  string
 	Now      func() time.Time
 	DailyCap int
-	day      string
-	used     int
+	// MonthlyCap and CountFile keep the free quota (1,000 credits/month, 1 per basic search) safe across restarts.
+	MonthlyCap int
+	CountFile  string
+	day        string
+	used       int
+}
+
+// monthUse reads/increments a persistent "YYYY-MM n" counter. It fails closed (error) when the cap is reached.
+func (t *TavilySearch) monthUse(now time.Time) error {
+	if t.CountFile == "" {
+		return nil
+	}
+	cap := t.MonthlyCap
+	if cap == 0 {
+		cap = 900
+	}
+	m := now.UTC().Format("2006-01")
+	n := 0
+	if raw, err := os.ReadFile(t.CountFile); err == nil {
+		var mm string
+		var nn int
+		if _, e := fmt.Sscanf(string(raw), "%s %d", &mm, &nn); e == nil && mm == m {
+			n = nn
+		}
+	}
+	if n >= cap {
+		return fmt.Errorf("monthly search budget used")
+	}
+	return os.WriteFile(t.CountFile, []byte(fmt.Sprintf("%s %d\n", m, n+1)), 0o600)
 }
 
 func (t *TavilySearch) Search(q string) ([]SearchResult, error) {
@@ -99,11 +126,14 @@ func (t *TavilySearch) Search(q string) ([]SearchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("no search key")
 	}
+	if err := t.monthUse(now()); err != nil {
+		return nil, err
+	}
 	key := strings.TrimSpace(strings.SplitN(string(raw), "\n", 2)[0])
 	if key == "" {
 		return nil, fmt.Errorf("no search key")
 	}
-	body, _ := json.Marshal(map[string]any{"query": trunc(q, 300), "search_depth": "basic", "max_results": 3, "include_answer": false, "include_raw_content": false, "include_images": false})
+	body, _ := json.Marshal(map[string]any{"query": trunc(q, 300), "search_depth": "basic", "max_results": 5, "include_answer": false, "include_raw_content": false, "include_images": false})
 	t.used++
 	b, st, err := t.P.PostJSON("https://api.tavily.com/search", map[string]string{"Authorization": "Bearer " + key}, body, 20)
 	if err != nil || st == 0 {
@@ -437,12 +467,13 @@ func sentences(text string) []string {
 }
 
 type cand struct {
-	ctx   string // page title: used to resolve a leading pronoun ("It is the highest...")
-	text  string
-	src   int
-	pos   int
-	score float64
-	cover float64
+	conflict bool   // set on the picked sentences when sources name different people
+	ctx      string // page title: used to resolve a leading pronoun ("It is the highest...")
+	text     string
+	src      int
+	pos      int
+	score    float64
+	cover    float64
 }
 
 // rank scores sentences against the query terms with BM25 (idf from the candidate pool), plus coverage and a small
@@ -677,6 +708,10 @@ func (c *Chat) Reply(chat, text string) string {
 		return "That could mean several things (" + cleanTitle(results[0].Title) + " has more than one meaning). Tell me which one you mean, e.g. add a few words of detail. " + results[0].URL
 	}
 	pages := subjectPages(query, rerankResults(query, results))
+	whoDid := reWhoDid.MatchString(strings.ToLower(strings.TrimSpace(query)))
+	if whoDid {
+		pages = rerankResults(query, results) // credit questions need a second page to cross-check
+	}
 	if len(pages) > 3 {
 		pages = pages[:3]
 	}
@@ -699,7 +734,7 @@ func (c *Chat) Reply(chat, text string) string {
 		ok = false // facts live deeper in the page than the intro: always read the best page (intro text stays as candidates)
 	}
 	fetched := 0
-	for i := 0; !ok && i < len(pages) && fetched < 2; i++ {
+	for i := 0; (!ok || (whoDid && fetched < 2)) && i < len(pages) && fetched < 2; i++ {
 		if c.Pages == nil || c.Res == nil || !c.Now().Before(deadline) {
 			break
 		}
@@ -717,6 +752,9 @@ func (c *Chat) Reply(chat, text string) string {
 	if !ok {
 		st.rest = nil
 		msg := "I found pages but nothing in them that clearly answers that, so I won't guess."
+		if isOffice(strings.ToLower(strings.TrimSpace(query))) {
+			msg = "I couldn't find a page sentence that names the person who currently holds that office, and office holders change, so I won't guess."
+		}
 		if len(srcs) > 0 {
 			msg += " You can read: " + srcs[0].URL
 		}
@@ -736,7 +774,11 @@ func (c *Chat) Reply(chat, text string) string {
 	}
 	st.srcs = ls
 	st.rest = rest
-	out := fitSentences(parts, 900) + "\n\n" + srcNote + " " + strings.Join(ls, "  ")
+	lead := ""
+	if len(picked) > 1 && picked[0].conflict {
+		lead = "Pages name different people for this, so I can't tell which is right. Two quoted claims: "
+	}
+	out := lead + fitSentences(parts, 900) + "\n\n" + srcNote + " " + strings.Join(ls, "  ")
 	if len(rest) > 0 {
 		out += "\nSay \"more\" for more."
 	}
@@ -963,6 +1005,54 @@ func evaluate(query string, results, srcs []SearchResult, cands []cand) (picked 
 	if len(ranked) == 0 || ranked[0].cover < minCover {
 		return nil, nil, false
 	}
+	lq := strings.ToLower(strings.TrimSpace(query))
+	if isOffice(lq) {
+		// "who is the president/CEO/... of X" asks for a person AND for who holds it now. Only a sentence that names
+		// a person and says current/incumbent counts; an office definition does not answer it.
+		var keep []cand
+		for _, cd := range ranked {
+			if reName.MatchString(nameOnly(cd.text, cd.ctx)) && reCurrent.MatchString(cd.text) {
+				keep = append(keep, cd)
+			}
+		}
+		ranked = keep
+		if len(ranked) == 0 {
+			return nil, nil, false
+		}
+	}
+	if reWhoDid.MatchString(lq) && len(ranked) > 1 {
+		// several supported sentences naming DIFFERENT people: show both instead of silently choosing one
+		var first, second *cand
+		var n1 map[string]bool
+		for i := range ranked {
+			if ranked[i].score < 0.6*ranked[0].score {
+				break
+			}
+			ns := names(nameOnly(ranked[i].text, ranked[i].ctx))
+			if len(ns) == 0 || !hasWhoVerb(lq, ranked[i].text) {
+				continue
+			}
+			if first == nil {
+				first, n1 = &ranked[i], ns
+				continue
+			}
+			disjoint := true
+			for k := range ns {
+				if n1[k] {
+					disjoint = false
+				}
+			}
+			if disjoint {
+				second = &ranked[i]
+				break
+			}
+		}
+		if first != nil && second != nil {
+			a, b := *first, *second
+			a.conflict, b.conflict = true, true
+			return []cand{a, b}, nil, true
+		}
+	}
 	used := map[string]bool{}
 	same := func(a, b string) bool {
 		n := 40
@@ -1011,4 +1101,54 @@ func evaluate(query string, results, srcs []SearchResult, cands []cand) (picked 
 		return picked[a].pos < picked[b].pos
 	})
 	return picked, rest, len(picked) > 0
+}
+
+var (
+	reOffice  = regexp.MustCompile(`^who (is|are) (the )?(current |present |new )?[a-z' ]+ (of|for|in) `)
+	reCurrent = regexp.MustCompile(`(?i)\b(incumbent|current|currently)\b`)
+	reWhoDid  = regexp.MustCompile(`^who (invented|discovered|wrote|founded|created|painted|directed|built|designed|developed|composed|first)\b|^who is the (inventor|author|founder|creator|discoverer)\b`)
+	reName    = regexp.MustCompile(`\b[A-Z][a-z]+(?: [A-Z][a-z.]+){1,3}\b`)
+)
+
+// nameOnly drops the page-subject words so "Things Fall Apart" or "Mount Kilimanjaro" are not read as a person's name.
+func nameOnly(text, ctx string) string {
+	for _, w := range strings.Fields(ctx) {
+		text = strings.ReplaceAll(text, w, "")
+	}
+	return text
+}
+
+func names(text string) map[string]bool {
+	m := map[string]bool{}
+	for _, n := range reName.FindAllString(text, -1) {
+		if f := strings.Fields(n); len(f) >= 2 {
+			m[f[len(f)-1]] = true // surname-ish key
+		}
+	}
+	return m
+}
+
+func isOffice(lq string) bool { return reOffice.MatchString(lq) && !reWhoDid.MatchString(lq) }
+
+var whoVerbs = map[string]*regexp.Regexp{
+	"invent": regexp.MustCompile(`(?i)\binvent`), "discover": regexp.MustCompile(`(?i)\bdiscover`), "found": regexp.MustCompile(`(?i)\bfound(ed|er)`),
+	"creat": regexp.MustCompile(`(?i)\bcreat(ed|or)`), "paint": regexp.MustCompile(`(?i)\bpaint(ed|er)`), "direct": regexp.MustCompile(`(?i)\bdirect(ed|or)`),
+	"design": regexp.MustCompile(`(?i)\bdesign(ed|er)`), "develop": regexp.MustCompile(`(?i)\bdevelop(ed|er)`), "compos": regexp.MustCompile(`(?i)\bcompos(ed|er)`),
+	"wrote": regexp.MustCompile(`(?i)\b(wrote|written|writer|author)\b`), "built": regexp.MustCompile(`(?i)\b(built|builder|constructed)\b`),
+}
+
+// hasWhoVerb: the sentence carries the question's own verb ("invented", "wrote"...), so a name in it is credited with that act.
+func hasWhoVerb(lq, text string) bool {
+	for k, re := range whoVerbs {
+		q := k
+		if k == "wrote" {
+			q = "wrote|author|writer"
+		}
+		if regexp.MustCompile(`\b(`+q+`)`).MatchString(lq) || (k == "invent" && strings.Contains(lq, "invent")) || (k == "found" && strings.Contains(lq, "found")) {
+			if re.MatchString(text) {
+				return true
+			}
+		}
+	}
+	return false
 }
