@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -19,22 +20,22 @@ func SelfTestChat(tools *Tools, curl string, log func(string)) bool {
 		if !cond {
 			st, ok = "FAIL", false
 		}
-		fmt.Printf("%s %s %s\n", st, name, trunc(detail, 160))
+		fmt.Printf("%s %s %s\n", st, name, detail)
 	}
 	start := time.Now()
 	deadline := start.Add(150 * time.Second)
-	type q struct{ in, want, name, not string }
+	type q struct{ in, want, name, not, re string }
 	for _, t := range []q{
-		{"hey", "", "small talk", ""},
-		{"what can you do?", "search", "capabilities", ""},
-		{"what is the capital of Nigeria?", "Abuja", "web answer + page fetch", "punishment"},
-		{"more", "", "follow-up 'more'", "punishment"},
-		{"who was Ada Lovelace", "mathematician", "definition lead", "Day is"},
-		{"how tall is Mount Kilimanjaro", "5,895", "numeric answer", "Multiple species"},
-		{"who wrote Things Fall Apart", "Achebe", "author question", "Okonkwo"},
-		{"how far is the moon from earth", "distance", "distance question", "59%"},
-		{"when was the Eiffel Tower built", "1887", "date question", "1891"},
-		{"write me a poem", "can't write", "honest refusal", ""},
+		{"hey", "", "small talk", "", ""},
+		{"what can you do?", "search", "capabilities", "", ""},
+		{"what is the capital of Nigeria?", "Abuja", "web answer + page fetch", "punishment", ""},
+		{"more", "", "follow-up 'more'", "punishment", ""},
+		{"who was Ada Lovelace", "mathematician", "definition lead", "Day is", ""},
+		{"how tall is Mount Kilimanjaro", "5,895", "numeric answer", "Multiple species", `5,895\s*m|19,341\s*ft`},
+		{"who wrote Things Fall Apart", "Achebe", "author question", "Okonkwo", `(?i)(written|wrote|author)[^.]*Achebe|Achebe[^.]*(wrote|written|novel)`},
+		{"how far is the moon from earth", "moon", "distance question", "59%", `(?i)\b\d[\d,.]*\s*(km|kilomet|mi\b|miles)`},
+		{"when was the Eiffel Tower built", "1887", "date question", "1891", `(?i)\b(built|construct|completed)[^.]*\b188[79]\b|\b188[79]\b[^.]*\b(built|construct|completed)`},
+		{"write me a poem", "can't write", "honest refusal", "", ""},
 	} {
 		if time.Now().After(deadline) {
 			check(t.name, false, "time budget exhausted")
@@ -42,7 +43,7 @@ func SelfTestChat(tools *Tools, curl string, log func(string)) bool {
 		}
 		t0 := time.Now()
 		r := c.Reply("selftest", t.in)
-		good := strings.Contains(strings.ToLower(r), strings.ToLower(t.want)) && r != "" && (t.not == "" || !strings.Contains(strings.ToLower(r), strings.ToLower(t.not)))
+		good := (t.re == "" || regexp.MustCompile(t.re).MatchString(r)) && strings.Contains(strings.ToLower(r), strings.ToLower(t.want)) && r != "" && (t.not == "" || !strings.Contains(strings.ToLower(r), strings.ToLower(t.not)))
 		check(t.name, good, fmt.Sprintf("(%.1fs) %s", time.Since(t0).Seconds(), strings.ReplaceAll(r, "\n", " ")))
 	}
 	// private destinations must be refused before any request

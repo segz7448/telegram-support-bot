@@ -96,22 +96,28 @@ func (t *TavilySearch) monthUse(now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("search quota state missing: failing closed")
 	}
-	var mm string
-	var nn int
-	if _, e := fmt.Sscanf(string(raw), "%s %d", &mm, &nn); e != nil || nn < 0 || len(mm) != 7 {
+	var st struct {
+		Month string `json:"month"`
+		Used  int    `json:"used"`
+	}
+	if e := json.Unmarshal(raw, &st); e != nil || st.Used < 0 || len(st.Month) != 7 {
 		return fmt.Errorf("search quota state corrupt: failing closed")
 	}
 	n := 0
-	if mm == m {
-		n = nn
-	} else if mm > m {
+	if st.Month == m {
+		n = st.Used
+	} else if st.Month > m {
 		return fmt.Errorf("search quota state is from the future: failing closed")
 	}
 	if n >= cap {
 		return fmt.Errorf("monthly search budget used")
 	}
 	tmp := t.CountFile + ".tmp"
-	if err := os.WriteFile(tmp, []byte(fmt.Sprintf("%s %d\n", m, n+1)), 0o600); err != nil {
+	out, _ := json.Marshal(struct {
+		Month string `json:"month"`
+		Used  int    `json:"used"`
+	}{m, n + 1})
+	if err := os.WriteFile(tmp, append(out, '\n'), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, t.CountFile)
@@ -665,6 +671,18 @@ func rerankResults(q string, rs []SearchResult) []SearchResult {
 	return out
 }
 
+var reLeadPronoun = regexp.MustCompile(`(?i)^(it|he|she|they|this|these|its|his|her|their)\b`)
+
+// withSubject labels a quoted sentence that starts with a pronoun, so "It orbits Earth..." is shown as coming
+// from the page "Moon". The label is the page title, never invented text.
+func withSubject(sent, ctx string) string {
+	ctx = strings.TrimSpace(ctx)
+	if ctx == "" || !reLeadPronoun.MatchString(sent) || strings.Contains(strings.ToLower(sent), strings.ToLower(ctx)) {
+		return sent
+	}
+	return "(page: " + ctx + ") " + sent
+}
+
 const srcNote = "Quoted from the web (untrusted, may be wrong):"
 
 // Reply answers one message. It never returns an empty string.
@@ -775,7 +793,7 @@ func (c *Chat) Reply(chat, text string) string {
 	seen := map[int]bool{}
 	for _, p := range picked {
 		seen[p.src] = true
-		parts = append(parts, p.text)
+		parts = append(parts, withSubject(p.text, p.ctx))
 	}
 	var ls []string
 	for i, s := range srcs {
@@ -818,7 +836,7 @@ var synonyms = map[string][]string{
 	"population": {"inhabitant", "census", "resident", "people"}, "old": {"age", "born", "year"},
 	"far": {"distance", "kilometre", "mile", "km"}, "long": {"length", "kilometre", "mile", "year"},
 	"big": {"size", "area", "square"}, "cost": {"price", "dollar", "usd"}, "price": {"cost", "dollar", "usd"},
-	"die": {"death", "died"}, "wrote": {"author", "written", "writer", "novel", "book", "published"}, "penned": {"author", "written", "writer", "novel"}, "writer": {"author", "wrote", "written", "novel"}, "author": {"writer", "wrote", "written", "novel"}, "authored": {"author", "written", "writer"}, "write": {"author", "written", "writer", "novel", "book"}, "discover": {"discovered", "discoverer"}, "paint": {"painter", "painted"}, "direct": {"directed", "director"}, "built": {"construct", "completed", "opened", "erected"}, "build": {"construct", "completed", "opened"}, "when": {}, "die2": nil, "born": {"birth"}, "found": {"founded", "established"}, "invent": {"inventor", "invented"},
+	"die": {"death", "died"}, "wrote": {"author", "written", "writer", "novel", "book", "published"}, "penned": {"author", "written", "writer", "novel"}, "writer": {"author", "wrote", "written", "novel"}, "author": {"writer", "wrote", "written", "novel"}, "authored": {"author", "written", "writer"}, "write": {"author", "written", "writer", "novel", "book"}, "discover": {"discovered", "discoverer"}, "paint": {"painter", "painted"}, "direct": {"directed", "director"}, "built": {"construct", "completed", "opened", "erected"}, "build": {"construct", "completed", "opened"}, "completed": {"built", "construct", "finished", "opened"}, "finished": {"built", "completed"}, "complete": {"built", "construct", "completed"}, "when": {}, "die2": nil, "born": {"birth"}, "found": {"founded", "established"}, "invent": {"inventor", "invented"},
 }
 
 var reRefNoise = regexp.MustCompile(`(?i)↑|\^|archived (from|at|on)|retrieved \d|wayback|\bISBN\b|\bdoi\b|\bS2CID\b|\bPMID\b|\bpp?\. ?\d|^\W*(see also|references|external links)\b|^["“]`)

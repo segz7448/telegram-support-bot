@@ -96,7 +96,7 @@ Privacy note for any hosted search API: queries leave the phone. Tavily's Platfo
 
 ### Search key (Tavily, free plan) - set up only after the owner approves
 Set `TG_SEARCH_KEY_FILE=/path/to/file` (key alone on the first line, chmod 600, never in the repo or logs). Requests send only the question text
-(basic depth, 5 results, `include_answer:false`, so Tavily's own AI answer is not used). A persistent counter `search_count.txt` in TGBOT_DIR stops at
+(basic depth, 5 results, `include_answer:false`, so Tavily's own AI answer is not used). A persistent counter at `TG_SEARCH_STATE_FILE` (JSON `{"month":"2026-11","used":0}`, create once outside the deployment dir; the bot uses its UTC clock, updates it atomically before each request, and fails closed with no request if it is unset, missing, corrupt or from the future) stops at
 900 searches per calendar month (free plan is 1,000 credits; a basic search costs 1) and there is also a 30/day cap. On any search failure the bot
 falls back to keyless Wikipedia, then to an honest "couldn't find". Tavily's terms allow it to keep queries and use them to improve its services and AI.
 ### Credit and current-office questions
