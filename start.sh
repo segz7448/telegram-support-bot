@@ -7,4 +7,5 @@ if [ -z "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TG_TOKEN_FILE" ]; then
   TELEGRAM_BOT_TOKEN="$(head -n1 "$TG_TOKEN_FILE" 2>/dev/null | tr -d '\r\n ')"; export TELEGRAM_BOT_TOKEN
 fi
 export TGBOT_DIR="$PWD"
+export TG_GENERAL_CHAT=1
 exec ./tgbot-arm64
