@@ -145,7 +145,7 @@ func (g *LudoSave) eval(side int) float64 {
 			case p == 56:
 				s += sign * 70
 			default:
-				s += sign * (float64(p) + 1.5)
+				s += sign * (float64(p) + ludoEntry)
 				if p > 50 || ludoSafe[ludoAbs(side2, p)] {
 					s += sign * 3
 				}
@@ -164,6 +164,9 @@ func (l *Ludo) choose(g *LudoSave, side, roll, level int, legal []int) int {
 	if level <= 1 {
 		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(legal))))
 		return legal[int(n.Int64())]
+	}
+	if level >= 4 {
+		return l.chooseExpectimax(g, side, roll, level, legal)
 	}
 	best, bestV := legal[0], -1e18
 	for _, i := range legal {
@@ -249,7 +252,7 @@ func (l *Ludo) botTurn(g *LudoSave) string {
 }
 
 var (
-	reLudoNew = regexp.MustCompile(`(?i)^(?:play\s+|start\s+|new\s+)?ludo(?:\s+game)?(?:\s+(?:at\s+)?level\s+([1-3]))?\s*[.!]?$`)
+	reLudoNew = regexp.MustCompile(`(?i)^(?:play\s+|start\s+|new\s+)?ludo(?:\s+game)?(?:\s+(?:at\s+)?level\s+([1-5]))?\s*[.!]?$`)
 )
 
 func (l *Ludo) load() (*ludoFile, error) {
@@ -263,7 +266,7 @@ func (l *Ludo) load() (*ludoFile, error) {
 	return f, nil
 }
 
-const ludoHelp = "Ludo on the standard cross-shaped board, two players sitting opposite (you red at the bottom, me yellow at the top). Rule choices, since Ludo has many house variants: 4 tokens each; you need a 6 to bring a token out onto your start square; any 6 gives another roll, and if your third roll in a row is a 6 it is not played and the turn passes (moves you already made that turn stay); a roll must be used if any token can move (you pick which); landing on my lone token sends it back to base, except on a safe square (the four start squares and the four star squares); a capture or reaching home gives no extra roll; tokens of one colour may share a square; there are no blockades; you need the exact roll to enter home (a token's route is 56 steps from its start square: 50 more track squares, 5 home-column squares, then home). House choices: captures and finishing give no extra roll, and no blockades, which differ from some published variants. First to get all four tokens home wins. Dice come from the system's secure random generator for both of us, and I never see your roll before it is made. Say \"ludo\" or \"ludo level 2\" (levels 1-3), then tap Roll or say \"roll\". My level 1 moves randomly, level 2 uses a one-step scoring rule, level 3 also averages over your possible replies; these are baseline heuristics. Also: ludo board, ludo resign."
+const ludoHelp = "Ludo on the standard cross-shaped board, two players sitting opposite (you red at the bottom, me yellow at the top). Rule choices, since Ludo has many house variants: 4 tokens each; you need a 6 to bring a token out onto your start square; any 6 gives another roll, and if your third roll in a row is a 6 it is not played and the turn passes (moves you already made that turn stay); a roll must be used if any token can move (you pick which); landing on my lone token sends it back to base, except on a safe square (the four start squares and the four star squares); a capture or reaching home gives no extra roll; tokens of one colour may share a square; there are no blockades; you need the exact roll to enter home (a token's route is 56 steps from its start square: 50 more track squares, 5 home-column squares, then home). House choices: captures and finishing give no extra roll, and no blockades, which differ from some published variants. First to get all four tokens home wins. Dice come from the system's secure random generator for both of us, and I never see your roll before it is made. Say \"ludo\" or \"ludo level 2\" (levels 1-5), then tap Roll or say \"roll\". My level 1 moves randomly, level 2 uses a one-step scoring rule, levels 3 averages over your replies; levels 4 and 5 run a dice-aware search (expectimax) 2 and 3 moves ahead with my own scoring rule. All are plain scoring and search programs, no learning, and Ludo has a lot of dice luck so a better player wins only more often, not always. Also: ludo board, ludo resign."
 
 func (l *Ludo) buttons(g *LudoSave) string {
 	type btn struct {
@@ -654,3 +657,80 @@ func abs2(v int) int {
 	}
 	return v
 }
+
+// expectimax: value for side `me` after a move, looking `depth` further moves ahead. Dice are chance nodes (1/6
+// each); the mover maximises (me) or minimises (opponent) the same evaluation, and a 6 gives the same side the next
+// move. It is a plain search over our own evaluation function: no learning, no model.
+func (g *LudoSave) expectimax(me, mover, depth int) float64 {
+	if g.won(me) {
+		return 1000
+	}
+	if g.won(1 - me) {
+		return -1000
+	}
+	if depth == 0 {
+		return g.eval(me)
+	}
+	total := 0.0
+	for r := 1; r <= 6; r++ {
+		lg := g.legal(mover, r)
+		next := 1 - mover
+		if r == 6 {
+			next = mover
+		}
+		if len(lg) == 0 {
+			total += g.expectimax(me, next, depth-1)
+			continue
+		}
+		best := -1e18
+		if mover != me {
+			best = 1e18
+		}
+		for _, i := range lg {
+			h := g.clone()
+			cap := h.move(mover, i, r)
+			v := h.expectimax(me, next, depth-1)
+			if cap {
+				if mover == me {
+					v += 8
+				} else {
+					v -= 8
+				}
+			}
+			if (mover == me && v > best) || (mover != me && v < best) {
+				best = v
+			}
+		}
+		total += best
+	}
+	return total / 6
+}
+
+// Level 4 searches 2 further moves (level 5: 3) after the candidate move. The cost is bounded: at most 4 tokens,
+// 6 dice per node.
+func (l *Ludo) chooseExpectimax(g *LudoSave, side, roll, level int, legal []int) int {
+	depth := 2
+	if level >= 5 {
+		depth = 3
+	}
+	best, bestV := legal[0], -1e18
+	for _, i := range legal {
+		h := g.clone()
+		cap := h.move(side, i, roll)
+		next := 1 - side
+		if roll == 6 {
+			next = side
+		}
+		v := h.expectimax(side, next, depth)
+		if cap {
+			v += 8
+		}
+		if v > bestV {
+			best, bestV = i, v
+		}
+	}
+	return best
+}
+
+// ludoEntry is the score value of having a token out of base (a 6 is needed to enter, about six rolls on average).
+var ludoEntry = 18.0

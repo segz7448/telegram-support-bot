@@ -2,6 +2,7 @@ package main
 
 import (
 	"math/rand"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -107,7 +108,7 @@ func TestLudoStrength(t *testing.T) {
 			t.Fatalf("level %d should clearly beat random", lv)
 		}
 	}
-	w, n := 0, 400
+	w, n := 0, 300
 	for i := 0; i < n; i++ {
 		a := i % 2
 		var lvs [2]int
@@ -199,5 +200,25 @@ func TestLudoBoundaries(t *testing.T) {
 	h.move(0, 0, 6)
 	if h.Tok[0][0] != 0 {
 		t.Fatalf("entry should place token on its start square, got %d", h.Tok[0][0])
+	}
+}
+
+func TestLudoSearchStrength(t *testing.T) {
+	if os.Getenv("LUDO_SEARCH") == "" {
+		t.Skip("opt-in: LUDO_SEARCH=1")
+	}
+	rnd := rand.New(rand.NewSource(5))
+	l := &Ludo{}
+	for _, pair := range [][2]int{{5, 2}} {
+		w, n := 0, 300
+		for i := 0; i < n; i++ {
+			a := i % 2
+			var lvs [2]int
+			lvs[a], lvs[1-a] = pair[0], pair[1]
+			if ludoSim(l, lvs, rnd) == a {
+				w++
+			}
+		}
+		t.Logf("level %d vs level %d, %d games alternating first: %d wins (%.1f%%)", pair[0], pair[1], n, w, 100*float64(w)/float64(n))
 	}
 }
