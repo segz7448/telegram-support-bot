@@ -85,25 +85,36 @@ type TavilySearch struct {
 // monthUse reads/increments a persistent "YYYY-MM n" counter. It fails closed (error) when the cap is reached.
 func (t *TavilySearch) monthUse(now time.Time) error {
 	if t.CountFile == "" {
-		return nil
+		return fmt.Errorf("search quota state path not configured: failing closed")
 	}
 	cap := t.MonthlyCap
 	if cap == 0 {
 		cap = 900
 	}
 	m := now.UTC().Format("2006-01")
+	raw, err := os.ReadFile(t.CountFile)
+	if err != nil {
+		return fmt.Errorf("search quota state missing: failing closed")
+	}
+	var mm string
+	var nn int
+	if _, e := fmt.Sscanf(string(raw), "%s %d", &mm, &nn); e != nil || nn < 0 || len(mm) != 7 {
+		return fmt.Errorf("search quota state corrupt: failing closed")
+	}
 	n := 0
-	if raw, err := os.ReadFile(t.CountFile); err == nil {
-		var mm string
-		var nn int
-		if _, e := fmt.Sscanf(string(raw), "%s %d", &mm, &nn); e == nil && mm == m {
-			n = nn
-		}
+	if mm == m {
+		n = nn
+	} else if mm > m {
+		return fmt.Errorf("search quota state is from the future: failing closed")
 	}
 	if n >= cap {
 		return fmt.Errorf("monthly search budget used")
 	}
-	return os.WriteFile(t.CountFile, []byte(fmt.Sprintf("%s %d\n", m, n+1)), 0o600)
+	tmp := t.CountFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(fmt.Sprintf("%s %d\n", m, n+1)), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, t.CountFile)
 }
 
 func (t *TavilySearch) Search(q string) ([]SearchResult, error) {

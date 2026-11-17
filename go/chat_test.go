@@ -300,6 +300,7 @@ func TestTavilyRequestShapeQuotaAndUnsafeResults(t *testing.T) {
 	kf := dir + "/key"
 	_ = os.WriteFile(kf, []byte("tvly-TESTKEY\n"), 0o600)
 	fp := &fakePoster{status: 200, body: []byte(`{"results":[{"title":"A","url":"https://example.com/a","content":"alpha"},{"title":"B","url":"http://127.0.0.1/x","content":"bad"},{"title":"C","url":"https://10.0.0.1/x","content":"bad"}]}`)}
+	_ = os.WriteFile(dir+"/count", []byte("2000-01 0\n"), 0o600)
 	ts := &TavilySearch{P: fp, KeyFile: kf, CountFile: dir + "/count", MonthlyCap: 2}
 	rs, err := ts.Search("what is photosynthesis")
 	if err != nil || len(rs) != 1 || rs[0].URL != "https://example.com/a" {
@@ -327,5 +328,24 @@ func TestTavilyFailureFallsBackToWikipediaOrAbstains(t *testing.T) {
 	c, _, _ := newTestChat(&fakeS{err: fmt.Errorf("search service returned 429")}, nil, nil)
 	if got := c.Reply("1", "who is the mayor of Lagos"); !strings.Contains(got, "couldn't find") {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestQuotaStateFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	kf := dir + "/key"
+	_ = os.WriteFile(kf, []byte("k"), 0o600)
+	fp := &fakePoster{status: 200, body: []byte(`{"results":[]}`)}
+	for name, content := range map[string]string{"missing": "", "corrupt": "garbage", "future": "2999-01 0\n"} {
+		cf := dir + "/" + name
+		if content != "" {
+			_ = os.WriteFile(cf, []byte(content), 0o600)
+		}
+		if _, err := (&TavilySearch{P: fp, KeyFile: kf, CountFile: cf}).Search("x"); err == nil {
+			t.Fatalf("%s state must fail closed", name)
+		}
+	}
+	if fp.calls != 0 {
+		t.Fatal("network call made despite bad state")
 	}
 }
