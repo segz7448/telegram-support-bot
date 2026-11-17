@@ -83,9 +83,15 @@ func NewTools(f Fetcher, log func(string)) *Tools {
 		cache:   map[string]cacheEntry{}}
 }
 
-const helpGeneral = "I'm a chat bot running on a phone. I'm not a language model: I match what you say to things I can do, search the web, read a few pages, and quote the most relevant sentences with their links. So I can be wrong or miss the point; check the links. Say \"more\" after an answer for more from the same pages.\n" +
-	"Quick tools: maths (12*(3+4)), units (5 km in miles), money (100 usd to eur), weather in Lagos, define serendipity, wiki Alan Turing.\n" +
-	"I can't write essays, poems or code. When I look something up, your words go to a web search service and the sites I read. I only remember the last topic of the chat, in memory."
+const helpGeneral = "I'm a chat bot running on a phone. I'm not a language model and I can't reason: I match what you say to things I can do, search the web, read a few pages, and quote the most relevant sentences with their links. So I can be wrong or miss the point; check the links. Say \"more\" after an answer for more from the same pages.\n" +
+	"Maths and stats: 12*(3+4), 15% of 80, percent change from 50 to 75, mean of 3, 5, 8, standard deviation of 2 4 4 5.\n" +
+	"Dates and time: days until 2026-12-25, what day is 2027-03-01, 30 days from today, time in Tokyo, convert 3 pm New York to Lagos. Dates use UTC unless the owner set a time zone; I say which one I used.\n" +
+	"Calculator script (numbers only, no files or network): calc script: let s = 0; for i = 1 to 10 { s = s + i }; print s\n" +
+	"Designs: quote card: text - Author | poster: Title | Subtitle | Footer | bar chart: Mon=5, Tue=8 title: Sales | line chart / pie chart / banner. Add theme: dark, blue, green, sunset, light or mono. Built-in templates, not Canva.\n" +
+	"Pictures: send a slightly blurry picture with the caption: sharpen. It sharpens edges locally (no AI) and can't restore lost detail.\n" +
+	"Also: units (5 km in miles), money (100 usd to eur), weather in Lagos, define serendipity, wiki Alan Turing.\n" +
+	"The owner can teach me: remember that my wifi name is Blue / forget my wifi name / what do you know. Say whoami to see your Telegram id.\n" +
+	"I can't write essays, poems or programs, or read text in pictures. When I look something up, your words go to a web search service and the sites I read. I only remember the last topic of the chat, in memory."
 
 const helpText = "I answer questions from prepared replies, and I can do a few lookups:\n" +
 	"- maths: 12*(3+4), 15% of 80\n" +

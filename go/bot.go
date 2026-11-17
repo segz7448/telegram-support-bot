@@ -133,6 +133,90 @@ func call(t Transport, api, token, method string, params url.Values, timeout int
 	return body, nil
 }
 
+var reSharpen = regexp.MustCompile(`(?i)\b(sharpen|sharper|sharpness|unblur|deblur|de-blur|fix (?:the )?blur|less blurry|clearer|enhance)\b`)
+
+// photoMessage reads a private-chat photo (or image document) and its caption.
+func photoMessage(u map[string]any) (cid int64, fileID string, size int, caption string, ok bool) {
+	m, _ := u["message"].(map[string]any)
+	chat, _ := m["chat"].(map[string]any)
+	if chat == nil || chat["type"] != "private" {
+		return
+	}
+	idf, isNum := chat["id"].(float64)
+	if !isNum || idf != math.Trunc(idf) {
+		return
+	}
+	caption, _ = m["caption"].(string)
+	if ph, _ := m["photo"].([]any); len(ph) > 0 {
+		best := -1.0
+		for _, it := range ph {
+			p, _ := it.(map[string]any)
+			w, _ := p["width"].(float64)
+			h, _ := p["height"].(float64)
+			if fid, _ := p["file_id"].(string); fid != "" && w*h > best {
+				best = w * h
+				fileID = fid
+				sz, _ := p["file_size"].(float64)
+				size = int(sz)
+			}
+		}
+	} else if d, _ := m["document"].(map[string]any); d != nil {
+		mt, _ := d["mime_type"].(string)
+		if mt != "image/jpeg" && mt != "image/png" {
+			return
+		}
+		fileID, _ = d["file_id"].(string)
+		sz, _ := d["file_size"].(float64)
+		size = int(sz)
+	}
+	if fileID == "" {
+		return
+	}
+	return int64(idf), fileID, size, caption, true
+}
+
+// handlePhoto sharpens a picture sent with a sharpen-type caption. Pictures are never stored: they live in memory
+// during the call, and the result is a new JPEG without camera metadata.
+func (r *Runner) handlePhoto(cid int64, fileID string, size int, caption string) string {
+	if !reSharpen.MatchString(caption) {
+		return "I can sharpen a slightly blurry picture. Send it again with the caption: sharpen"
+	}
+	fg, ok1 := r.T.(FileGetter)
+	ps, ok2 := r.T.(PhotoSender)
+	if !ok1 || !ok2 {
+		return "Picture editing isn't available on this connection."
+	}
+	if size > maxImageBytes {
+		return "That picture is too big (limit 8 MB)."
+	}
+	res, err := call(r.T, r.API, r.Token, "getFile", url.Values{"file_id": {fileID}}, 20)
+	if err != nil {
+		return "I couldn't fetch that picture from Telegram. Try sending it again."
+	}
+	result, _ := res["result"].(map[string]any)
+	fp, _ := result["file_path"].(string)
+	if fp == "" {
+		return "I couldn't fetch that picture from Telegram. Try sending it again."
+	}
+	data, err := fg.GetFile(r.API, r.Token, fp, maxImageBytes, 60)
+	if err != nil {
+		return "I couldn't download that picture. Try again."
+	}
+	out, dims, err := SharpenImage(data, 2, 1.2)
+	if err != nil {
+		return "I can't sharpen that: " + err.Error() + "."
+	}
+	capt := "Sharpened (" + dims + "): local unsharp mask, no AI. It makes edges crisper but can't bring back detail that blur removed. Telegram may recompress it. Camera metadata (location, device) is not included."
+	raw, perr := ps.PostPhoto(r.API, r.Token, fmt.Sprint(cid), capt, out, filepath.Dir(r.StatePath), 90)
+	var body map[string]any
+	if perr == nil && json.Unmarshal(raw, &body) == nil {
+		if okb, _ := body["ok"].(bool); okb {
+			return ""
+		}
+	}
+	return "I sharpened it but couldn't upload the result. Try again in a minute."
+}
+
 func validMessage(u map[string]any) (int64, string, bool) {
 	m, _ := u["message"].(map[string]any)
 	chat, _ := m["chat"].(map[string]any)
@@ -267,6 +351,7 @@ func (r *Runner) Run() error {
 	lastBeat := time.Now()
 	r.Log(fmt.Sprintf("polling started (long-poll %ds, offset %d)", pollSec, offset))
 	rate := map[int64][]time.Time{}
+	lastPhoto := map[int64]time.Time{}
 	for {
 		if len(rate) > 1000 { // evict idle chats
 			for k, ts := range rate {
@@ -319,7 +404,20 @@ func (r *Runner) Run() error {
 				continue
 			}
 			uid := int(uidf)
-			if cid, text, ok := validMessage(u); ok {
+			if pcid, fid, psize, pcap, isPhoto := photoMessage(u); isPhoto && r.Chat != nil {
+				if time.Since(lastPhoto[pcid]) < 15*time.Second {
+					call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(pcid)}, "text": {"One picture at a time please. Try again in a few seconds."}}, 30)
+				} else {
+					lastPhoto[pcid] = time.Now()
+					call(r.T, r.API, r.Token, "sendChatAction", url.Values{"chat_id": {fmt.Sprint(pcid)}, "action": {"upload_photo"}}, 5)
+					if msg := r.handlePhoto(pcid, fid, psize, pcap); msg != "" {
+						call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(pcid)}, "text": {msg}}, 30)
+					} else {
+						replies++
+						r.Log(fmt.Sprintf("reply sent (total %d, edited image)", replies))
+					}
+				}
+			} else if cid, text, ok := validMessage(u); ok {
 				now := time.Now()
 				q := rate[cid][:0:0]
 				for _, t := range rate[cid] {

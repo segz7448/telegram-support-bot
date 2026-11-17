@@ -16,7 +16,11 @@ func (c CurlTransport) PostPhoto(api, token, chatID, caption string, png []byte,
 	if err != nil {
 		return nil, &APIError{Msg: err.Error()}
 	}
-	f, err := os.CreateTemp(dir, "img-*.png")
+	ext, mime := ".png", "image/png"
+	if len(png) > 2 && png[0] == 0xFF && png[1] == 0xD8 {
+		ext, mime = ".jpg", "image/jpeg"
+	}
+	f, err := os.CreateTemp(dir, "img-*"+ext)
 	if err != nil {
 		return nil, &APIError{Msg: "cannot write temp image"}
 	}
@@ -35,7 +39,7 @@ func (c CurlTransport) PostPhoto(api, token, chatID, caption string, png []byte,
 	if caption != "" {
 		fmt.Fprintf(&cfg, "form-string = \"caption=%s\"\n", cfgEscape(caption))
 	}
-	fmt.Fprintf(&cfg, "form = \"photo=@%s;type=image/png\"\n", cfgEscape(abs))
+	fmt.Fprintf(&cfg, "form = \"photo=@%s;type=%s\"\n", cfgEscape(abs), mime)
 	args := []string{"-q", "-sS", "--connect-timeout", "15", "--max-time", fmt.Sprint(timeoutSec)}
 	if strings.HasPrefix(api, "https://") {
 		args = append(args, "--proto", "=https", "--proto-redir", "=https")
@@ -49,6 +53,40 @@ func (c CurlTransport) PostPhoto(api, token, chatID, caption string, png []byte,
 		return nil, &APIError{Msg: redact("curl failed: "+strings.TrimSpace(errb.String()), token)}
 	}
 	return out.Bytes(), nil
+}
+
+// GetFile downloads a Telegram file (token only in curl's stdin config) with a hard size cap.
+func (c CurlTransport) GetFile(api, token, filePath string, maxBytes int, timeoutSec int) ([]byte, error) {
+	curl, err := resolveCurl(c.Curl)
+	if err != nil {
+		return nil, &APIError{Msg: err.Error()}
+	}
+	if strings.Contains(filePath, "..") || strings.ContainsAny(filePath, "\"\n\r ?#") {
+		return nil, &APIError{Msg: "bad file path"}
+	}
+	var cfg bytes.Buffer
+	fmt.Fprintf(&cfg, "url = \"%s\"\n", cfgEscape(api+"/file/bot"+token+"/"+filePath))
+	args := []string{"-q", "-sS", "--connect-timeout", "15", "--max-time", fmt.Sprint(timeoutSec), "--max-filesize", fmt.Sprint(maxBytes), "-f"}
+	if strings.HasPrefix(api, "https://") {
+		args = append(args, "--proto", "=https", "--proto-redir", "=https")
+	}
+	args = append(args, "-K", "-")
+	cmd := exec.Command(curl, args...)
+	cmd.Stdin = &cfg
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return nil, &APIError{Msg: redact("download failed: "+strings.TrimSpace(errb.String()), token)}
+	}
+	if out.Len() > maxBytes {
+		return nil, &APIError{Msg: "file too big"}
+	}
+	return out.Bytes(), nil
+}
+
+// FileGetter is implemented by CurlTransport.
+type FileGetter interface {
+	GetFile(api, token, filePath string, maxBytes int, timeoutSec int) ([]byte, error)
 }
 
 // PhotoSender is implemented by CurlTransport; test transports may not implement it.
