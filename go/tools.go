@@ -171,10 +171,10 @@ func (t *Tools) Pre(text string) (string, bool) {
 		return r, true
 	}
 	if m := reWx.FindStringSubmatch(low); m != nil {
-		return t.weather(strings.TrimSpace(m[1])), true
+		return t.weatherF(strings.TrimSpace(m[1]), strings.Contains(low, "forecast")), true
 	}
 	if m := reWx2.FindStringSubmatch(low); m != nil && len(strings.Fields(m[1])) <= 2 {
-		return t.weather(strings.TrimSpace(m[1])), true
+		return t.weatherF(strings.TrimSpace(m[1]), strings.Contains(low, "forecast")), true
 	}
 	if m := reDefPre.FindStringSubmatch(low); m != nil && len(strings.Fields(m[1])) <= 3 {
 		return t.define(strings.TrimSpace(m[1])), true
@@ -556,11 +556,17 @@ func (t *Tools) currency(v float64, from, to string) string {
 
 var wxDesc = regexp.MustCompile(`\s+`)
 
-func (t *Tools) weather(place string) string {
+func (t *Tools) weather(place string) string { return t.weatherF(place, false) }
+
+// weatherF with forecast=true adds a per-day outlook (up to 3 days) taken from the same wttr.in response: no extra request.
+func (t *Tools) weatherF(place string, forecast bool) string {
 	if place == "" || len(place) > 60 {
 		return "Tell me the place, like: weather in Lagos."
 	}
 	key := "wx|" + place
+	if forecast {
+		key = "wxf|" + place
+	}
 	if r, ok := t.cached(key, 10*time.Minute); ok {
 		return r
 	}
@@ -615,6 +621,33 @@ func (t *Tools) weather(place string) string {
 	if ds, ok := raw["weather"].([]any); ok && len(ds) > 0 {
 		if d, ok := ds[0].(map[string]any); ok {
 			reply += fmt.Sprintf(" Today: %s to %s°C.", str(d, "mintempC"), str(d, "maxtempC"))
+		}
+	}
+	if ds, ok := raw["weather"].([]any); ok && forecast {
+		reply += "\nOutlook:"
+		for i, dv := range ds {
+			d, _ := dv.(map[string]any)
+			if d == nil || i >= 3 {
+				break
+			}
+			noon := ""
+			if hs, ok := d["hourly"].([]any); ok {
+				for _, hv := range hs {
+					h, _ := hv.(map[string]any)
+					if h != nil && str(h, "time") == "1200" {
+						if wd, ok := h["weatherDesc"].([]any); ok && len(wd) > 0 {
+							if m, ok := wd[0].(map[string]any); ok {
+								noon = strings.ToLower(strings.TrimSpace(wxDesc.ReplaceAllString(str(m, "value"), " "))) + " around midday, rain chance " + str(h, "chanceofrain") + "%"
+							}
+						}
+					}
+				}
+			}
+			line := fmt.Sprintf("\n%s: %s to %s°C", cleanDate(str(d, "date")), str(d, "mintempC"), str(d, "maxtempC"))
+			if noon != "" {
+				line += ", " + noon
+			}
+			reply += line
 		}
 	}
 	reply += "\nPlace matched by name (first result), so check it's the right one. Source: wttr.in with Open-Meteo place search."
@@ -798,4 +831,12 @@ func SelfTest(b *Brain, t *Tools, net bool) bool {
 		check("fx", strings.Contains(rep, "ECB reference rate"), "")
 	}
 	return ok
+}
+
+// cleanDate keeps only a plain YYYY-MM-DD from the weather service's date field.
+func cleanDate(s string) string {
+	if len(s) == 10 && s[4] == '-' && s[7] == '-' {
+		return s
+	}
+	return "day"
 }

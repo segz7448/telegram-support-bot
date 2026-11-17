@@ -242,3 +242,19 @@ func TestLiveLookups(t *testing.T) {
 		}
 	}
 }
+
+func TestWeatherForecastOutlook(t *testing.T) {
+	tl, f, _ := newFake(t)
+	f.routes["wttr.in/6.4541,3.3947"] = `{"current_condition":[{"temp_C":"27","FeelsLikeC":"30","humidity":"80","windspeedKmph":"10","weatherDesc":[{"value":"Clear"}]}],"weather":[` +
+		`{"date":"2026-11-17","mintempC":"22","maxtempC":"30","hourly":[{"time":"1200","chanceofrain":"10","weatherDesc":[{"value":"Sunny"}]}]},` +
+		`{"date":"2026-11-18","mintempC":"23","maxtempC":"31","hourly":[{"time":"1200","chanceofrain":"60","weatherDesc":[{"value":"Light rain"}]}]},` +
+		`{"date":"2026-11-19 <b>x</b>","mintempC":"21","maxtempC":"29","hourly":[]}]}`
+	r, ok := tl.Pre("forecast for lagos")
+	if !ok || !strings.Contains(r, "Outlook:") || !strings.Contains(r, "2026-11-18: 23 to 31°C, light rain around midday, rain chance 60%") || !strings.Contains(r, "day: 21 to 29°C") || strings.Contains(r, "<b>") {
+		t.Fatalf("forecast: %q", r)
+	}
+	r2, _ := tl.Pre("weather in lagos")
+	if strings.Contains(r2, "Outlook:") {
+		t.Errorf("plain weather must not carry the outlook: %q", r2)
+	}
+}
