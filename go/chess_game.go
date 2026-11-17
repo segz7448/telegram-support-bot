@@ -26,6 +26,7 @@ type ChessSave struct {
 	Over   bool     `json:"over"`
 	Result string   `json:"result,omitempty"`
 	Date   string   `json:"date"`
+	Sel    string   `json:"sel,omitempty"` // square picked by a tap, waiting for its destination
 }
 
 type chessFile struct {
@@ -276,8 +277,9 @@ func (c *Chess) engineMove(p Pos, rep map[string]int, level int) (Mv, int, int) 
 
 // ChessReply is what the bot sends: text, and optionally a board picture (PNG) with the text as its caption.
 type ChessReply struct {
-	Text string
-	PNG  []byte
+	Text   string
+	PNG    []byte
+	Markup string // inline keyboard JSON for tap-to-move
 }
 
 const chessHelp = "Chess: say \"chess\" to start (\"chess as black\", \"chess level 3\"; levels 1-5). Moves: e2e4 or Nf3 or O-O. Also: board, hint, undo, draw, resign, pgn, level N, new chess. I'm a classical search program, not a language model: I can lose, and higher levels think longer (up to a few seconds)."
@@ -535,7 +537,11 @@ func (c *Chess) reply(g *ChessSave, msg string) *ChessReply {
 	if len([]rune(cap)) > 1000 {
 		cap = string([]rune(cap)[:1000])
 	}
-	return &ChessReply{Text: cap, PNG: RenderBoard(p, g.White, last)}
+	rep2 := &ChessReply{Text: cap, PNG: RenderBoard(p, g.White, last)}
+	if !g.Over && p.white == g.White {
+		rep2.Markup = chessMarkup(p, g.White, len(g.Moves), "")
+	}
+	return rep2
 }
 
 // ASCIIBoard is the text fallback when the picture can't be sent.

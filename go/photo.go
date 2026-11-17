@@ -12,6 +12,11 @@ import (
 // PostPhoto uploads a PNG with sendPhoto via curl multipart. The URL (with the token) goes through curl's stdin
 // config, never argv. The PNG goes through a 0600 temp file in dir that is removed right after.
 func (c CurlTransport) PostPhoto(api, token, chatID, caption string, png []byte, dir string, timeoutSec int) ([]byte, error) {
+	return c.PostPhotoMarkup(api, token, chatID, caption, "", png, dir, timeoutSec)
+}
+
+// PostPhotoMarkup is PostPhoto with an optional inline keyboard (reply_markup JSON).
+func (c CurlTransport) PostPhotoMarkup(api, token, chatID, caption, markup string, png []byte, dir string, timeoutSec int) ([]byte, error) {
 	curl, err := resolveCurl(c.Curl)
 	if err != nil {
 		return nil, &APIError{Msg: err.Error()}
@@ -38,6 +43,9 @@ func (c CurlTransport) PostPhoto(api, token, chatID, caption string, png []byte,
 	fmt.Fprintf(&cfg, "form = \"chat_id=%s\"\n", cfgEscape(chatID))
 	if caption != "" {
 		fmt.Fprintf(&cfg, "form-string = \"caption=%s\"\n", cfgEscape(caption))
+	}
+	if markup != "" {
+		fmt.Fprintf(&cfg, "form-string = \"reply_markup=%s\"\n", cfgEscape(markup))
 	}
 	fmt.Fprintf(&cfg, "form = \"photo=@%s;type=%s\"\n", cfgEscape(abs), mime)
 	args := []string{"-q", "-sS", "--connect-timeout", "15", "--max-time", fmt.Sprint(timeoutSec)}
@@ -92,4 +100,9 @@ type FileGetter interface {
 // PhotoSender is implemented by CurlTransport; test transports may not implement it.
 type PhotoSender interface {
 	PostPhoto(api, token, chatID, caption string, png []byte, dir string, timeoutSec int) ([]byte, error)
+}
+
+// MarkupPhotoSender sends a photo with an inline keyboard.
+type MarkupPhotoSender interface {
+	PostPhotoMarkup(api, token, chatID, caption, markup string, png []byte, dir string, timeoutSec int) ([]byte, error)
 }

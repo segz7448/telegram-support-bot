@@ -387,7 +387,7 @@ func (r *Runner) Run() error {
 				r.Log("reminder sent")
 			}
 		}
-		res, err := call(r.T, r.API, r.Token, "getUpdates", url.Values{"offset": {fmt.Sprint(offset)}, "timeout": {fmt.Sprint(pollSec)}, "allowed_updates": {`["message"]`}}, pollSec+15)
+		res, err := call(r.T, r.API, r.Token, "getUpdates", url.Values{"offset": {fmt.Sprint(offset)}, "timeout": {fmt.Sprint(pollSec)}, "allowed_updates": {`["message","callback_query"]`}}, pollSec+15)
 		if err != nil {
 			errs++
 			failPolls++
@@ -423,7 +423,9 @@ func (r *Runner) Run() error {
 				continue
 			}
 			uid := int(uidf)
-			if pcid, fid, psize, pcap, isPhoto := photoMessage(u); isPhoto && r.Chat != nil {
+			if cq, okq := u["callback_query"].(map[string]any); okq {
+				r.handleTap(cq)
+			} else if pcid, fid, psize, pcap, isPhoto := photoMessage(u); isPhoto && r.Chat != nil {
 				if time.Since(lastPhoto[pcid]) < 15*time.Second {
 					call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(pcid)}, "text": {"One picture at a time please. Try again in a few seconds."}}, 30)
 				} else {
@@ -464,7 +466,7 @@ func (r *Runner) Run() error {
 								if ps, okp := r.T.(PhotoSender); okp {
 									done := false
 									for a := 0; a < 2 && !done; a++ {
-										raw, perr := ps.PostPhoto(r.API, r.Token, fmt.Sprint(cid), cr.Text, cr.PNG, filepath.Dir(r.StatePath), 60)
+										raw, perr := r.sendBoard(ps, fmt.Sprint(cid), cr)
 										var body map[string]any
 										if perr == nil && json.Unmarshal(raw, &body) == nil {
 											if okb, _ := body["ok"].(bool); okb {
