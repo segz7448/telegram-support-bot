@@ -573,6 +573,15 @@ func (t *Tools) weatherF(place string, forecast, sun bool) string {
 	if m, off := gateOff("weather"); off {
 		return m
 	}
+	if !wxLegacy {
+		return t.weatherMET(place, forecast, sun)
+	}
+	return t.weatherLegacy(place, forecast, sun)
+}
+
+// weatherLegacy is the wttr.in + Open-Meteo stack. Open-Meteo's free place search is non-commercial only and wttr.in
+// has no published terms, so it runs only when the owner names weather_legacy in TG_ENABLE_SOURCES (personal use).
+func (t *Tools) weatherLegacy(place string, forecast, sun bool) string {
 	if place == "" || len(place) > 60 {
 		return "Tell me the place, like: weather in Lagos."
 	}

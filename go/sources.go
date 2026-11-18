@@ -11,6 +11,9 @@ import (
 // wording of the request, and the reply says plainly that the source is off. Unset = everything on, as before.
 var sourceOff = map[string]bool{}
 
+// wxLegacy selects the old wttr.in + Open-Meteo weather stack (personal use only). Default: MET Norway + OpenStreetMap.
+var wxLegacy bool
+
 func loadSourceGates() {
 	sourceOff = map[string]bool{}
 	for _, s := range strings.Split(os.Getenv("TG_DISABLE_SOURCES"), ",") {
@@ -26,7 +29,8 @@ func loadSourceGates() {
 	for _, s := range strings.Split(os.Getenv("TG_ENABLE_SOURCES"), ",") {
 		enabled[strings.ToLower(strings.TrimSpace(s))] = true
 	}
-	for _, n := range []string{"weather", "news"} {
+	wxLegacy = enabled["weather_legacy"]
+	for _, n := range []string{"news"} {
 		if !enabled[n] {
 			sourceOff[n] = true
 		}

@@ -60,6 +60,8 @@ func filterHelp(h string) string {
 		h = strings.ReplaceAll(h, ", weather in Lagos", "")
 		h = strings.ReplaceAll(h, "- weather in Lagos\n", "")
 		h = strings.ReplaceAll(h, "Open-Meteo, wttr.in or ", "")
+	} else if !wxLegacy {
+		h = strings.ReplaceAll(h, "Open-Meteo, wttr.in or ", "OpenStreetMap, MET Norway or ")
 	}
 	return h
 }

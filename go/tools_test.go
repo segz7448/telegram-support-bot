@@ -33,6 +33,8 @@ func (f *fakeF) Get(u string, _ int) ([]byte, int, error) {
 }
 
 func newFake(t *testing.T) (*Tools, *fakeF, *[]string) {
+	wxLegacy = true // these tests cover the legacy wttr.in stack; the public MET stack has its own tests
+	t.Cleanup(func() { wxLegacy = false })
 	wx, _ := os.ReadFile("testdata/wttr_sample.json")
 	f := &fakeF{routes: map[string]string{
 		"geocoding":             `{"results":[{"name":"Lagos","latitude":6.45407,"longitude":3.39467,"country":"Nigeria","admin1":"Lagos"}]}`,

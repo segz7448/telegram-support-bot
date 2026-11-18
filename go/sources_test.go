@@ -10,7 +10,7 @@ import (
 func withGates(t *testing.T, v string) {
 	os.Setenv("TG_DISABLE_SOURCES", v)
 	loadSourceGates()
-	t.Cleanup(func() { os.Unsetenv("TG_DISABLE_SOURCES"); sourceOff = map[string]bool{} })
+	t.Cleanup(func() { os.Unsetenv("TG_DISABLE_SOURCES"); sourceOff = map[string]bool{}; wxLegacy = false })
 }
 
 func TestSourceGatesNeverContactDisabledHosts(t *testing.T) {
@@ -50,13 +50,14 @@ func TestPublicDefaultsDisableWeatherAndNewsUnlessEnabled(t *testing.T) {
 	os.Unsetenv("TG_DISABLE_SOURCES")
 	os.Unsetenv("TG_ENABLE_SOURCES")
 	loadSourceGates()
-	t.Cleanup(func() { os.Unsetenv("TG_ENABLE_SOURCES"); os.Unsetenv("TG_DISABLE_SOURCES"); sourceOff = map[string]bool{} })
-	if !sourceOff["weather"] || !sourceOff["news"] || sourceOff["fx"] || sourceOff["wiki"] || sourceOff["github"] {
-		t.Fatalf("defaults: %v", sourceOff)
-	}
-	tl, f, _ := newFake(t)
-	if r, _ := tl.Pre("weather in Lagos"); !strings.Contains(r, "not available") || len(f.hits) != 0 {
-		t.Fatalf("%q %v", r, f.hits)
+	t.Cleanup(func() {
+		os.Unsetenv("TG_ENABLE_SOURCES")
+		os.Unsetenv("TG_DISABLE_SOURCES")
+		sourceOff = map[string]bool{}
+		wxLegacy = false
+	})
+	if sourceOff["weather"] || !sourceOff["news"] || sourceOff["fx"] || sourceOff["wiki"] || sourceOff["github"] || wxLegacy {
+		t.Fatalf("defaults: %v legacy=%v", sourceOff, wxLegacy)
 	}
 	ff := &fakeFeed{body: bbcXML, code: 200}
 	n, _ := newsFor(t, ff, "42")
@@ -66,17 +67,17 @@ func TestPublicDefaultsDisableWeatherAndNewsUnlessEnabled(t *testing.T) {
 	if r, _ := n.Handle("42", "daily news at 8am"); !strings.Contains(r, "not available") {
 		t.Fatalf("schedule: %q", r)
 	}
-	if h := filterHelp(helpGeneral); strings.Contains(h, "BBC") || strings.Contains(h, "weather in Lagos") {
+	if h := filterHelp(helpGeneral); strings.Contains(h, "BBC") || strings.Contains(h, "wttr.in") {
 		t.Fatalf("help still advertises disabled sources: %q", h)
 	}
-	os.Setenv("TG_ENABLE_SOURCES", "weather, news")
+	os.Setenv("TG_ENABLE_SOURCES", "weather_legacy, news")
 	loadSourceGates()
-	if sourceOff["weather"] || sourceOff["news"] {
+	if !wxLegacy || sourceOff["news"] {
 		t.Fatal("explicit enable ignored")
 	}
 	os.Setenv("TG_DISABLE_SOURCES", "news")
 	loadSourceGates()
-	if sourceOff["weather"] || !sourceOff["news"] {
+	if !sourceOff["news"] {
 		t.Fatalf("disable must win: %v", sourceOff)
 	}
 }
