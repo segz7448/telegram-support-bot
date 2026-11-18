@@ -71,7 +71,9 @@ type extGate struct {
 	Desk        *fileDesk         // last upload of the owner (memory only), for explicit edit/analyse requests
 	img         map[string][]byte // at most one picture waiting to be sent per chat
 	// Wait is how long a request is awaited inline before it carries on in the background (default 25 s).
-	Wait            time.Duration
+	Wait time.Duration
+	// Deliver sends a finished background result to the chat on its own (set by the bot). Nil = the owner collects it.
+	Deliver         func(chat, text string)
 	job             *extJob
 	curKind, curOpt string
 	file            map[string]*OutFile
@@ -144,7 +146,7 @@ func (g *extGate) route(chat, text string) (reply string, img []byte, handled bo
 		g.curKind, g.curOpt = kind, opt
 		g.mu.Unlock()
 		g.beginPending("", "asking", "")
-		j := g.startJob(func(prog func(conv, stage, part1 string)) (ExtReply, error) {
+		j := g.startJobFor(chat, func(prog func(conv, stage, part1 string)) (ExtReply, error) {
 			g.setProgress(prog)
 			return g.A.Ask(ExtRequest{Text: slot, Kind: kind})
 		})
@@ -171,7 +173,7 @@ func (g *extGate) route(chat, text string) (reply string, img []byte, handled bo
 		return "The daily limit for outside-assistant requests is used up. It resets tomorrow.", nil, true
 	}
 	g.beginPending("", "asking", "") // saved BEFORE the ask: if the process dies now, the ask may or may not have been accepted
-	j := g.startJob(func(prog func(conv, stage, part1 string)) (ExtReply, error) {
+	j := g.startJobFor(chat, func(prog func(conv, stage, part1 string)) (ExtReply, error) {
 		g.setProgress(prog)
 		return g.A.Ask(ExtRequest{Text: t, Image: wantImg})
 	})
@@ -255,10 +257,14 @@ func (g *extGate) shape(r ExtReply, err error) (string, []byte) {
 
 // extJob is one request running in the background so the bot keeps answering other messages while it waits.
 type extJob struct {
-	done    chan struct{}
-	r       ExtReply
-	err     error
-	dropped bool
+	done     chan struct{}
+	r        ExtReply
+	err      error
+	dropped  bool
+	chat     string
+	finished bool // guarded by g.mu
+	detached bool // the inline wait ended; the background worker delivers the result itself
+	claimed  bool // exactly one party (inline wait, "check answer" or the background worker) handles the result
 }
 
 func (g *extGate) wait() time.Duration {
@@ -281,30 +287,114 @@ func (g *extGate) setProgress(f func(conv, stage, part1 string)) {
 }
 
 func (g *extGate) startJob(run func(prog func(conv, stage, part1 string)) (ExtReply, error)) *extJob {
-	j := &extJob{done: make(chan struct{})}
+	return g.startJobFor("", run)
+}
+
+func (g *extGate) startJobFor(chat string, run func(prog func(conv, stage, part1 string)) (ExtReply, error)) *extJob {
+	j := &extJob{done: make(chan struct{}), chat: chat}
 	g.mu.Lock()
 	g.job = j
 	g.mu.Unlock()
 	go func() {
-		j.r, j.err = run(func(conv, stage, part1 string) {
+		prog := func(conv, stage, part1 string) {
 			if !j.dropped {
 				g.savePending(conv, stage, part1)
 			}
-		})
+		}
+		j.r, j.err = run(prog)
+		// A request still running at the service is polled (read-only, never re-asked) in the background.
+		if c, ok := g.A.(Collector); ok && g.Deliver != nil {
+			for i := 0; i < 8 && j.err == nil && j.r.Pending != "" && !j.dropped; i++ {
+				pp := extPending{Owner: g.Owner, Conv: j.r.Pending, Stage: j.r.Stage, Part1: j.r.Part1}
+				g.mu.Lock()
+				pp.Kind, pp.Opt = g.curKind, g.curOpt
+				g.mu.Unlock()
+				g.savePending(pp.Conv, pp.Stage, pp.Part1)
+				time.Sleep(5 * time.Second)
+				j.r, j.err = c.Collect(pp)
+			}
+		}
+		g.mu.Lock()
+		j.finished = true
+		deliver := j.detached && !j.claimed && !j.dropped && g.Deliver != nil && j.chat != ""
+		if deliver {
+			j.claimed = true
+		}
+		g.mu.Unlock()
 		close(j.done)
+		if deliver {
+			t, _ := g.finish(j.chat, j)
+			g.Deliver(j.chat, t)
+		}
 	}()
 	return j
 }
 
+// ResumeSaved collects a request that was saved before a restart, once, read-only (nothing is asked again), and
+// delivers the result to the owner by itself.
+func (g *extGate) ResumeSaved() {
+	if g == nil || g.A == nil || g.Owner == "" || g.Deliver == nil {
+		return
+	}
+	p := g.loadPending()
+	c, ok := g.A.(Collector)
+	if p == nil || !ok || p.Conv == "" || p.Stage == "asking" {
+		return
+	}
+	pp := *p
+	g.mu.Lock()
+	g.curKind, g.curOpt = p.Kind, p.Opt
+	g.mu.Unlock()
+	j := g.startJobFor(g.Owner, func(prog func(conv, stage, part1 string)) (ExtReply, error) {
+		g.setProgress(prog)
+		return c.Collect(pp)
+	})
+	g.mu.Lock()
+	j.detached = true
+	g.mu.Unlock()
+}
+
 const extStillWorking = "Still working. It is running in the background and I'm still answering your other messages. Say \"check answer\" to collect it, or \"drop it\" to forget it. I won't re-send the request."
 
-// await waits a bounded time for the job, then either returns its result or says it is still running.
+const extStillWorkingAuto = "Still working. It is running in the background and I'm still answering your other messages. I'll send the result here when it is ready, and I won't re-send the request. You can also say \"drop it\" to forget it."
+
+func (g *extGate) stillWorking() string {
+	if g.Deliver != nil {
+		return extStillWorkingAuto
+	}
+	return extStillWorking
+}
+
+// await waits a bounded time for the job, then either returns its result or says it is still running (the background
+// worker then delivers the result by itself, once).
 func (g *extGate) await(chat string, j *extJob) (string, []byte) {
 	select {
 	case <-j.done:
 	case <-time.After(g.wait()):
-		return extStillWorking, nil
+		g.mu.Lock()
+		if !j.finished {
+			j.detached = true
+			if j.chat == "" {
+				j.chat = chat
+			}
+			g.mu.Unlock()
+			return g.stillWorking(), nil
+		}
+		g.mu.Unlock()
+		<-j.done
 	}
+	g.mu.Lock()
+	if j.claimed {
+		g.mu.Unlock()
+		return "That result was already sent above.", nil
+	}
+	j.claimed = true
+	g.mu.Unlock()
+	return g.finish(chat, j)
+}
+
+// finish turns a finished job into text (and stashes a file or picture for sending).
+func (g *extGate) finish(chat string, j *extJob) (string, []byte) {
 	g.mu.Lock()
 	if g.job == j {
 		g.job = nil
@@ -323,7 +413,7 @@ func (g *extGate) await(chat string, j *extJob) (string, []byte) {
 	}
 	if r.Pending != "" {
 		g.savePending(r.Pending, r.Stage, r.Part1)
-		return extStillWorking, nil
+		return g.stillWorking(), nil
 	}
 	p := g.loadPending()
 	kind, opt := g.curKind, g.curOpt
@@ -409,7 +499,7 @@ func (g *extGate) pendingCmd(chat, text string) (string, []byte, bool) {
 	g.mu.Lock()
 	g.curKind, g.curOpt = p.Kind, p.Opt
 	g.mu.Unlock()
-	j = g.startJob(func(prog func(conv, stage, part1 string)) (ExtReply, error) {
+	j = g.startJobFor(chat, func(prog func(conv, stage, part1 string)) (ExtReply, error) {
 		g.setProgress(prog)
 		return c.Collect(pp)
 	})
@@ -520,7 +610,7 @@ func (g *extGate) fileWork(chat, t string) (string, bool) {
 		g.mu.Unlock()
 	}
 	g.beginPending("", "asking", "")
-	j := g.startJob(func(prog func(conv, stage, part1 string)) (ExtReply, error) {
+	j := g.startJobFor(chat, func(prog func(conv, stage, part1 string)) (ExtReply, error) {
 		g.setProgress(prog)
 		return g.A.Ask(req)
 	})

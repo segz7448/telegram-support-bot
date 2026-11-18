@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -235,8 +236,15 @@ func (r *Runner) handlePhoto(cid int64, fileID string, size int, caption string)
 		return "To make a collage, send 2 to 4 pictures together as one album with the caption \"collage\"."
 	}
 	ops := parseOps(caption)
-	if len(ops) == 0 {
+	wantOCR := len(ops) == 0 && reOCR.MatchString(caption)
+	if len(ops) == 0 && !wantOCR {
+		if strings.TrimSpace(caption) != "" {
+			return photoNoVision + photoHelp
+		}
 		return photoHelp
+	}
+	if wantOCR && ocrPath() == "" {
+		return ocrMissing + photoHelp
 	}
 	fg, ok1 := r.T.(FileGetter)
 	ps, ok2 := r.T.(PhotoSender)
@@ -258,6 +266,13 @@ func (r *Runner) handlePhoto(cid int64, fileID string, size int, caption string)
 	data, err := fg.GetFile(r.API, r.Token, fp, maxImageBytes, 60)
 	if err != nil {
 		return "I couldn't download that picture. Try again."
+	}
+	if wantOCR {
+		txt, oerr := OCRImage(data, filepath.Dir(r.StatePath))
+		if oerr != nil {
+			return "I couldn't read text from that picture: " + oerr.Error() + ". I won't guess what it says."
+		}
+		return txt
 	}
 	out, dims, err := EditImage(data, ops)
 	if err != nil {
@@ -485,6 +500,10 @@ func (r *Runner) Run() error {
 	offset, err := loadOffset(r.StatePath)
 	if err != nil {
 		return err
+	}
+	if r.Chat != nil && r.Chat.Ext != nil && r.Chat.Ext.Deliver == nil {
+		r.Chat.Ext.Deliver = r.deliverExt
+		r.Chat.Ext.ResumeSaved()
 	}
 	handled, errs := 0, 0
 	backoff := 1
@@ -904,4 +923,45 @@ func (r *Runner) handleDoc(cid int64, fileID string, size int, name string) stri
 		}
 	}
 	return DescribeUpload(name, data)
+}
+
+// deliverExt sends a background result (text, then any generated file or picture) to the chat without being asked.
+func (r *Runner) deliverExt(chat, text string) {
+	cid, err := strconv.ParseInt(chat, 10, 64)
+	if err != nil || cid <= 0 || r.Chat == nil || r.Chat.Ext == nil {
+		return
+	}
+	var f *OutFile
+	var img []byte
+	f = r.Chat.Ext.TakeFile(chat)
+	img = r.Chat.Ext.TakeImage(chat)
+	for a := 0; a < 3; a++ {
+		if _, err := call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {chat}, "text": {text}}, 30); err == nil {
+			r.Log("background result sent")
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if f != nil {
+		if ds, ok := r.T.(DocSender); ok {
+			capt := f.Caption
+			if capt == "" {
+				capt = "Generated file (unchecked, not run)"
+			}
+			raw, derr := ds.PostDocument(r.API, r.Token, chat, capt, f.Name, f.Data, filepath.Dir(r.StatePath), 90)
+			var body map[string]any
+			okb := false
+			if derr == nil && json.Unmarshal(raw, &body) == nil {
+				okb, _ = body["ok"].(bool)
+			}
+			if !okb {
+				call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {chat}, "text": {"(I built the file but couldn't upload it.)"}}, 30)
+			}
+		}
+	}
+	if len(img) > 0 {
+		if ps, ok := r.T.(PhotoSender); ok {
+			ps.PostPhoto(r.API, r.Token, chat, "Generated picture (unchecked)", img, filepath.Dir(r.StatePath), 60)
+		}
+	}
 }
