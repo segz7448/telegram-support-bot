@@ -43,7 +43,7 @@ func TestExtActionsNeverForwarded(t *testing.T) {
 	e.c.Ext = &extGate{A: f, Owner: "5"}
 	for _, in := range []string{"Can you make a call for me", "call my mom and tell her I am late", "send an email to my boss about the report", "order me a pizza", "pay my electricity bill", "text john hello"} {
 		r, _ := e.send("5", in)
-		if !strings.Contains(r, "Nothing was sent or done") {
+		if !strings.Contains(r, "I did not send or pass on anything") {
 			t.Errorf("%q -> %q", in, r)
 		}
 	}

@@ -120,8 +120,6 @@ func (w *WajoFo) CanImages() bool { return w.Images && w.Get != nil }
 
 var reWajoActionOut = regexp.MustCompile(`(?i)(?:ACTION_REFUSED|\bi (?:have |ve )?(?:called|dialed|phoned|emailed|e-mailed|texted|sent (?:an? )?(?:email|text|message)|paid|purchased|ordered|booked|signed (?:in|up)|created (?:an )?account)\b|\b(?:confirm|approve|authori[sz]e)\b.{0,40}\b(?:call|email|payment|purchase|order|booking)\b|\bshall i (?:go ahead|proceed|call|send|pay|book)\b|\bwould you like me to (?:call|email|text|send|pay|book|order)\b)`)
 
-const wajoActionStop = "The outside assistant's reply mentioned taking or confirming a real-world action (a call, message, payment, order or similar). I stopped there and did not relay or approve anything. If you did not ask for that, check the assistant's own activity log."
-
 var reGCSURL = regexp.MustCompile(`https://storage\.googleapis\.com/[^\s"'<>)\]]+`)
 
 func (w *WajoFo) sleep(d time.Duration) {
@@ -147,7 +145,7 @@ func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
 	w.LastConv = conv
 	for sc.Status == "working" {
 		if time.Now().After(deadline) {
-			return ExtReply{Text: "The outside assistant is still working on this. Say \"check answer\" in a minute to collect it."}, nil
+			return ExtReply{Pending: conv}, nil
 		}
 		args := map[string]any{"waitSeconds": 25}
 		if conv != "" {
@@ -162,6 +160,11 @@ func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
 			conv = sc.ConversationID
 		}
 	}
+	return w.finish(r, res, conv)
+}
+
+func (w *WajoFo) finish(r ExtRequest, res *rpcResp, conv string) (ExtReply, error) {
+	sc := res.Result.StructuredContent
 	if sc.Status == "failed" {
 		return ExtReply{}, fmt.Errorf("failed")
 	}
@@ -170,7 +173,7 @@ func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
 		txt = res.Result.Content[0].Text
 	}
 	if reWajoActionOut.MatchString(txt) {
-		return ExtReply{Text: wajoActionStop}, nil
+		return ExtReply{Text: extActionNote}, nil
 	}
 	out := ExtReply{Text: txt}
 	if r.Image && w.CanImages() && conv != "" {
@@ -209,4 +212,16 @@ func (w *WajoFo) fetchImage(conv string) []byte {
 		return nil
 	}
 	return b
+}
+
+// Collect fetches the result of a request that was still running (one poll, no new request is created).
+func (w *WajoFo) Collect(conv string) (ExtReply, error) {
+	res, err := w.call("get_fo_reply", map[string]any{"conversationId": conv, "waitSeconds": 25}, 70)
+	if err != nil {
+		return ExtReply{}, err
+	}
+	if res.Result.StructuredContent.Status == "working" {
+		return ExtReply{Pending: conv}, nil
+	}
+	return w.finish(ExtRequest{}, res, conv)
 }

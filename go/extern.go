@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -29,8 +31,9 @@ type ExtRequest struct {
 }
 
 type ExtReply struct {
-	Text  string
-	Image []byte // optional picture (PNG/JPEG) returned by the assistant
+	Pending string // conversation id of a request still running at the service (nothing is re-sent for it)
+	Text    string
+	Image   []byte // optional picture (PNG/JPEG) returned by the assistant
 }
 
 type ExternalAnswerer interface {
@@ -38,14 +41,27 @@ type ExternalAnswerer interface {
 	CanImages() bool
 }
 
+// Collector is implemented by answerers that can fetch the result of a request that was still running.
+type Collector interface {
+	Collect(conv string) (ExtReply, error)
+}
+
+type extPending struct {
+	Owner   string    `json:"owner"`
+	Conv    string    `json:"conv"`
+	Started time.Time `json:"started"`
+}
+
 type extGate struct {
 	A      ExternalAnswerer
 	Owner  string // verified owner chat id; empty = off
 	PerDay int
 	Now    func() time.Time
-	mu     sync.Mutex
-	day    string
-	used   int
+	// PendingFile saves at most one running request (owner id, service conversation id, start time; no key, no text).
+	PendingFile string
+	mu          sync.Mutex
+	day         string
+	used        int
 }
 
 var (
@@ -86,6 +102,9 @@ func (g *extGate) route(chat, text string) (reply string, img []byte, handled bo
 		return "", nil, false
 	}
 	t := strings.TrimSpace(text)
+	if r, im, ok := g.pendingCmd(chat, t); ok {
+		return r, im, true
+	}
 	if len(t) < 8 || len(t) > 1500 {
 		return "", nil, false
 	}
@@ -93,7 +112,7 @@ func (g *extGate) route(chat, text string) (reply string, img []byte, handled bo
 		return r, nil, true
 	}
 	if false {
-		return "That sounds like an action (a call, message, order or similar). I won't do it or pass it on without the details and your go-ahead. Tell me exactly who or what it is for and what it should say, and I'll check back with you before anything happens. Nothing was sent or done.", nil, true
+		return "That sounds like an action (a call, message, order or similar). I won't do it or pass it on without the details and your go-ahead. Tell me exactly who or what it is for and what it should say, and I'll check back with you before anything happens. I did not send or pass on anything.", nil, true
 	}
 	wantImg := reExtImage.MatchString(t)
 	if !wantImg && !(reExtHard.MatchString(t) && len(strings.Fields(t)) >= 5) {
@@ -102,21 +121,15 @@ func (g *extGate) route(chat, text string) (reply string, img []byte, handled bo
 	if wantImg && !g.A.CanImages() {
 		return "I can't return pictures from the outside assistant here yet.", nil, true
 	}
+	if g.loadPending() != nil {
+		return "An earlier outside-assistant request is still saved. Say \"check answer\" to collect it or \"drop it\" first. I won't start a second one on top of it.", nil, true
+	}
 	if !g.take() {
 		return "The daily limit for outside-assistant requests is used up. It resets tomorrow.", nil, true
 	}
 	r, err := g.A.Ask(ExtRequest{Text: t, Image: wantImg})
-	if err != nil {
-		return "I couldn't get an answer from the outside assistant just now. Nothing else was done. Try again in a minute.", nil, true
-	}
-	ans := strings.TrimSpace(r.Text)
-	if len([]rune(ans)) > 3500 {
-		ans = string([]rune(ans)[:3500]) + " (cut)"
-	}
-	if ans == "" && len(r.Image) == 0 {
-		return "The outside assistant sent back nothing usable.", nil, true
-	}
-	return fmt.Sprintf("From the outside assistant (unchecked, may be wrong):\n%s", ans), r.Image, true
+	txt, img := g.shape(r, err)
+	return txt, img, true
 }
 
 // action answers action-shaped requests locally for the owner: it asks for the missing details and sends nothing out.
@@ -126,9 +139,98 @@ func (g *extGate) action(chat, text string) (string, bool) {
 		return "", false
 	}
 	if reExtAction.MatchString(t) && !reExtImage.MatchString(t) && len(strings.Fields(t)) <= 14 && reExtActionLead.MatchString(t) {
-		return "That sounds like an action (a call, message, order or similar). I won't do it or pass it on without the details and your go-ahead. Tell me exactly who or what it is for and what it should say, and I'll check back with you before anything happens. Nothing was sent or done.", true
+		return "That sounds like an action (a call, message, order or similar). I won't do it or pass it on without the details and your go-ahead. Tell me exactly who or what it is for and what it should say, and I'll check back with you before anything happens. I did not send or pass on anything.", true
 	}
 	return "", false
 }
 
 var reExtActionLead = regexp.MustCompile(`(?i)^\s*(?:please |pls |hey )*(?:can you|could you|would you|will you|i need you to|i want you to|go and|help me)?\s*(?:call|phone|ring|dial|text|sms|whatsapp|email|e-mail|message|dm|tweet|post|publish|order|buy|purchase|pay|transfer|send|book|reserve|cancel|subscribe|unsubscribe|delete|sign ?up|register|apply|submit|make a call|place a call|make an order|make a payment|make a booking)\b`)
+
+func (g *extGate) loadPending() *extPending {
+	if g.PendingFile == "" {
+		return nil
+	}
+	b, err := os.ReadFile(g.PendingFile)
+	if err != nil {
+		return nil
+	}
+	var p extPending
+	if json.Unmarshal(b, &p) != nil || p.Conv == "" || p.Owner != g.Owner {
+		return nil // another owner's or damaged record is never used
+	}
+	return &p
+}
+
+func (g *extGate) savePending(conv string) error {
+	if g.PendingFile == "" {
+		return fmt.Errorf("no store")
+	}
+	now := time.Now
+	if g.Now != nil {
+		now = g.Now
+	}
+	b, _ := json.Marshal(extPending{Owner: g.Owner, Conv: conv, Started: now()})
+	tmp := g.PendingFile + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, g.PendingFile)
+}
+
+func (g *extGate) clearPending() { os.Remove(g.PendingFile) }
+
+var (
+	reExtCheck = regexp.MustCompile(`(?i)^\s*(?:please )?(?:check (?:the )?(?:answer|result|reply)|any (?:answer|news|update) (?:yet|from (?:it|them))|is it (?:ready|done))\s*[?.!]*\s*$`)
+	reExtDrop  = regexp.MustCompile(`(?i)^\s*(?:please )?(?:drop|forget|cancel) (?:it|that|the (?:pending )?(?:request|answer))\s*[?.!]*\s*$`)
+)
+
+const extActionNote = "The outside assistant's reply says an action may have been taken or is waiting for a go-ahead. I can't confirm or deny that, so I stopped and did not relay or approve anything. If you didn't ask for an action, check that assistant's own activity and tell me if anything looks wrong."
+
+func (g *extGate) shape(r ExtReply, err error) (string, []byte) {
+	if err != nil {
+		return "I couldn't get an answer from the outside assistant. I can't tell whether it started working on the request, and I won't send it again by myself. Ask again if you want a new attempt.", nil
+	}
+	if r.Pending != "" {
+		if g.savePending(r.Pending) != nil {
+			return "The outside assistant is still working, but I can't save the request to collect it later, so I won't promise a follow-up. I won't re-send it either.", nil
+		}
+		return "The outside assistant is still working on it. Say \"check answer\" to collect it, or \"drop it\" to forget it. I won't re-send the request.", nil
+	}
+	ans := strings.TrimSpace(r.Text)
+	if len([]rune(ans)) > 3500 {
+		ans = string([]rune(ans)[:3500]) + " (cut)"
+	}
+	if ans == "" && len(r.Image) == 0 {
+		return "The outside assistant sent back nothing usable.", nil
+	}
+	return fmt.Sprintf("From the outside assistant (unchecked, may be wrong):\n%s", ans), r.Image
+}
+
+// pendingCmd handles "check answer" / "drop it" for the owner when a saved request exists.
+func (g *extGate) pendingCmd(chat, text string) (string, []byte, bool) {
+	if !g.allowed(chat) || (!reExtCheck.MatchString(text) && !reExtDrop.MatchString(text)) {
+		return "", nil, false
+	}
+	p := g.loadPending()
+	if p == nil {
+		return "", nil, false // nothing saved: carry on locally
+	}
+	if reExtDrop.MatchString(text) {
+		g.clearPending()
+		return "Dropped. I forgot the pending request. The outside assistant may still finish it on its side.", nil, true
+	}
+	c, ok := g.A.(Collector)
+	if !ok {
+		return "I can't collect that here.", nil, true
+	}
+	r, err := c.Collect(p.Conv)
+	if err != nil {
+		return "I couldn't reach the outside assistant to collect it. The request is still saved. Try \"check answer\" again later, or \"drop it\".", nil, true
+	}
+	if r.Pending != "" {
+		return "Still working. Say \"check answer\" again later.", nil, true
+	}
+	g.clearPending()
+	t, img := g.shape(r, nil)
+	return t, img, true
+}

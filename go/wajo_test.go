@@ -70,7 +70,7 @@ func TestWajoActionReplyStops(t *testing.T) {
 	for _, txt := range []string{"ACTION_REFUSED", "I called your bank and they said...", "Shall I go ahead and send the email?", "I have emailed the report to your boss"} {
 		m := &mockPoster{replies: []string{sse(txt, "complete", "c1")}}
 		r, _ := newWajo(t, m).Ask(ExtRequest{Text: "summarise my situation"})
-		if !strings.Contains(r.Text, "did not relay or approve") {
+		if !strings.Contains(r.Text, "can't confirm or deny") {
 			t.Errorf("%q passed through: %q", txt, r.Text)
 		}
 	}
@@ -115,5 +115,74 @@ func TestWajoImageLinkValidation(t *testing.T) {
 	w2.Get = func(u string, max int) ([]byte, error) { return []byte("<html>not an image at all</html>"), nil }
 	if r, _ := w2.Ask(ExtRequest{Text: "generate image of a dog", Image: true}); len(r.Image) != 0 {
 		t.Error("non-image bytes accepted")
+	}
+}
+
+func TestExtPendingNoDuplicateAndRecovery(t *testing.T) {
+	m := &mockPoster{replies: []string{sse("", "working", "cP")}}
+	w := newWajo(t, m)
+	w.TotalSec = 1
+	pf := filepath.Join(t.TempDir(), "pend.json")
+	g := &extGate{A: w, Owner: "42", PerDay: 5, PendingFile: pf}
+	r, _, ok := g.route("42", "write a detailed plan for the whole month")
+	if !ok || !strings.Contains(r, "check answer") {
+		t.Fatalf("%q", r)
+	}
+	asks := 0
+	for _, c := range m.calls {
+		if strings.Contains(c, `"ask_fo"`) {
+			asks++
+		}
+	}
+	if asks != 1 {
+		t.Fatalf("ask_fo sent %d times", asks)
+	}
+	if st, _ := os.Stat(pf); st == nil || st.Mode().Perm() != 0o600 {
+		t.Fatal("pending file missing or not 0600")
+	}
+	b, _ := os.ReadFile(pf)
+	if strings.Contains(string(b), "wak_") || strings.Contains(string(b), "plan") {
+		t.Fatal("pending file holds key or text")
+	}
+	// a new request is refused while one is saved
+	n := len(m.calls)
+	r, _, _ = g.route("42", "explain the risks of the other plan in detail")
+	if len(m.calls) != n || !strings.Contains(r, "still saved") {
+		t.Fatalf("second request not blocked: %q", r)
+	}
+	// another owner's record is ignored
+	g2 := &extGate{A: w, Owner: "43", PendingFile: pf}
+	if g2.loadPending() != nil {
+		t.Fatal("foreign pending used")
+	}
+	// collect: still working, then complete
+	m.replies, m.i = []string{sse("", "working", "cP")}, 0
+	r, _, _ = g.route("42", "check answer")
+	if !strings.Contains(r, "Still working") || g.loadPending() == nil {
+		t.Fatalf("%q", r)
+	}
+	m.replies, m.i = []string{sse("Final plan", "complete", "cP")}, 0
+	r, _, _ = g.route("42", "check answer")
+	if !strings.Contains(r, "Final plan") || g.loadPending() != nil {
+		t.Fatalf("%q", r)
+	}
+	// drop
+	g.savePending("cQ")
+	r, _, _ = g.route("42", "drop it")
+	if !strings.Contains(r, "Dropped") || g.loadPending() != nil {
+		t.Fatalf("%q", r)
+	}
+	// groups never reach it
+	g.savePending("cQ")
+	if _, _, ok := g.route("-100", "check answer"); ok {
+		t.Fatal("group handled")
+	}
+}
+
+func TestExtErrorWordingNoFalseDenial(t *testing.T) {
+	g := &extGate{A: &WajoFo{P: &mockPoster{replies: []string{"{}"}}, KeyFile: "/nonexistent"}, Owner: "42"}
+	r, _, _ := g.route("42", "explain the risks of this plan please")
+	if strings.Contains(r, "Nothing else was done") || !strings.Contains(r, "can't tell whether") {
+		t.Fatalf("%q", r)
 	}
 }

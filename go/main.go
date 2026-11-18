@@ -173,7 +173,7 @@ func main() {
 			if v, err := strconv.Atoi(os.Getenv("TG_EXT_PER_DAY")); err == nil && v > 0 {
 				per = v
 			}
-			chat.Ext = &extGate{A: &WajoFo{P: CurlTransport{Curl: curl}, URL: os.Getenv("TG_EXT_URL"), KeyFile: os.Getenv("TG_EXT_KEY_FILE")}, Owner: strings.TrimSpace(os.Getenv("TG_OWNER_ID")), PerDay: per, Now: time.Now}
+			chat.Ext = &extGate{A: &WajoFo{P: CurlTransport{Curl: curl}, URL: os.Getenv("TG_EXT_URL"), KeyFile: os.Getenv("TG_EXT_KEY_FILE")}, Owner: strings.TrimSpace(os.Getenv("TG_OWNER_ID")), PerDay: per, Now: time.Now, PendingFile: os.Getenv("TG_EXT_PENDING_FILE")}
 			fmt.Fprintln(os.Stderr, "outside assistant: on (owner-only)")
 		}
 		tools.General = true
