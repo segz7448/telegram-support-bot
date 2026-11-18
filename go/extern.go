@@ -446,8 +446,11 @@ func (g *extGate) finish(chat string, j *extJob) (string, []byte) {
 	}
 	r, err := j.r, j.err
 	if err != nil {
-		if p := g.loadPending(); p != nil && p.Conv != "" {
-			return "I couldn't reach the outside assistant just now. The request is still saved. Say \"check answer\" to try collecting it again, or \"drop it\".", nil
+		if p := g.loadPending(); p != nil {
+			if p.Conv != "" {
+				return "I couldn't reach the outside assistant just now. The request is still saved. Say \"check answer\" to try collecting it again, or \"drop it\".", nil
+			}
+			return "The request stopped during setup before I learned its id. I can't safely check what happened, so I kept the saved marker and won't send it again. Say \"drop it\" to clear it before choosing a new attempt.", nil
 		}
 		g.clearPending()
 		return "I couldn't get an answer. I can't tell whether it started working on the request, and I won't send it again by myself. Ask again if you want a new attempt.", nil

@@ -35,7 +35,19 @@ func (w *WajoFo) mediaCall(tool string, args map[string]any) (*rpcResp, error) {
 	if c.URL != "https://mcp.api.wajo.ai/mcp" {
 		return nil, fmt.Errorf("unapproved media endpoint")
 	}
-	return c.call(tool, args, 70)
+	res, err := c.call(tool, args, 70)
+	if err != nil {
+		w.tr("media rpc=%s error=%s", tool, err.Error())
+	}
+	return res, err
+}
+
+func transientMediaSetup(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return s == "request failed" || s == "http 500" || s == "http 502" || s == "http 503" || s == "http 504"
 }
 
 func (w *WajoFo) askMedia(r ExtRequest) (ExtReply, error) {
@@ -64,17 +76,24 @@ func (w *WajoFo) askMedia(r ExtRequest) (ExtReply, error) {
 		msg = mediaGuard + "Generate an image: " + imageSubject(r.Text) + ". " + mediaOutputFormat
 	}
 	// Creating a session does not generate content. An ambiguous content ask is never resent.
-	sess, err := w.mediaCall("generate_session_id", map[string]any{"agent_id": w.MediaAgentID, "session_name": "Owner private media request"})
+	sess, err := w.mediaCall("generate_session_id", map[string]any{"agentId": w.MediaAgentID, "sessionName": "Owner private media request"})
+	if transientMediaSetup(err) {
+		w.tr("media setup transient_retry=1 content_asks=0")
+		w.sleep(5 * time.Second)
+		sess, err = w.mediaCall("generate_session_id", map[string]any{"agentId": w.MediaAgentID, "sessionName": "Owner private media request"})
+	}
 	if err != nil {
 		return ExtReply{}, err
 	}
 	sid := sess.Result.StructuredContent.SessionID
 	if sid == "" {
+		w.tr("media setup error=missing_session_id")
 		return ExtReply{}, fmt.Errorf("missing media session")
 	}
 	w.LastConv = sid
 	if w.ProgressChecked != nil {
 		if err := w.ProgressChecked(sid, stage, ""); err != nil {
+			w.tr("media setup error=pending_save_failed")
 			return ExtReply{}, fmt.Errorf("media pending save failed")
 		}
 	} else {

@@ -36,3 +36,9 @@ The tokenless `--selftest-media` mode uses a separate output folder and refuses 
 - Prompts forbid email, sharing, Drive uploads and other outside actions. Those instructions are not server-side confinement. The account's existing remote assistant remains action-capable; this patch cannot guarantee it performs no side effects.
 
 Release coordination and phone-side validation are still required. This is not a completed full-media connection, and remote editing must not be described as fixed.
+
+## V4ae setup recovery
+
+The observed live request failed before a media content ask was logged or a session was recoverable. Its exact historical transport/service error was not retained, so it is not claimed to be known. This revision records safe setup failure classes and retains the unknown-session marker instead of clearing it. It retries session creation once only for transport or selected transient server failures. Session creation submits no image content; a lost reply may leave an unused empty session. Content requests are never retried automatically.
+
+The new `--selftest-media-handler` mode exercises synthetic getUpdates, Runner, Chat, owner gate, the real existing outside service, saved-session collection and automatic mock sendPhoto. It does not contact Telegram or prove live incoming-chat success. A deterministic injected HTTP503 test covers recovery with two setup attempts and exactly one content request. Background photo uploads now check the API response and report an unconfirmed upload without retrying the photo.

@@ -53,6 +53,12 @@ func main() {
 	}
 	curlPath := os.Getenv("TG_CURL")
 	tools := NewTools(CurlTransport{Curl: curlPath}, func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
+	if len(os.Args) > 1 && os.Args[1] == "--selftest-media-handler" {
+		if !SelfTestMediaHandler(CurlTransport{Curl: curlPath}) {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 2 && os.Args[1] == "--selftest-media" {
 		if !SelfTestMedia(CurlTransport{Curl: os.Getenv("TG_CURL")}, os.Args[2]) {
 			os.Exit(1)

@@ -386,3 +386,106 @@ func TestMediaGenerationActionGateAndGuard(t *testing.T) {
 		t.Fatal("generation guard missing")
 	}
 }
+
+type setupFailPoster struct {
+	base            *mockPoster
+	failSetup       int
+	failContent     bool
+	setups, content int
+}
+
+func (p *setupFailPoster) PostJSON(u string, h map[string]string, b []byte, to int) ([]byte, int, error) {
+	if strings.Contains(string(b), `"generate_session_id"`) {
+		p.setups++
+		if p.setups <= p.failSetup {
+			return nil, 503, nil
+		}
+	}
+	if strings.Contains(string(b), `"chat_agent"`) {
+		p.content++
+		if p.failContent {
+			return nil, 503, nil
+		}
+	}
+	return p.base.PostJSON(u, h, b, to)
+}
+func TestMediaSetupRetryDoesNotRetryContent(t *testing.T) {
+	for _, failContent := range []bool{false, true} {
+		mp := &mockPoster{replies: []string{mediaSSE("", "", "s1"), mediaSSE("unavailable", "complete", "s1")}}
+		p := &setupFailPoster{base: mp, failSetup: 1, failContent: failContent}
+		w := newWajo(t, mp)
+		w.P = p
+		w.Media = true
+		w.Images = true
+		w.Get = func(string, int) ([]byte, error) { return nil, nil }
+		g := &extGate{A: w, Owner: "42", PendingFile: filepath.Join(t.TempDir(), "pending"), Wait: time.Second}
+		g.route("42", "generate image of a cup")
+		if p.setups != 2 || p.content != 1 {
+			t.Fatal(p.setups, p.content)
+		}
+		if failContent {
+			if q := g.loadPending(); q == nil || q.Conv != "s1" {
+				t.Fatal("lost ambiguous content session")
+			}
+		}
+	}
+}
+func TestMediaFailedSetupKeepsMarker(t *testing.T) {
+	mp := &mockPoster{replies: []string{`{}`}}
+	p := &setupFailPoster{base: mp, failSetup: 9}
+	w := newWajo(t, mp)
+	w.P = p
+	w.Media = true
+	w.Images = true
+	w.Get = func(string, int) ([]byte, error) { return nil, nil }
+	g := &extGate{A: w, Owner: "42", PendingFile: filepath.Join(t.TempDir(), "pending"), Wait: time.Second}
+	ans, _, _ := g.route("42", "generate image of a cup")
+	if g.loadPending() == nil || p.content != 0 || p.setups != 2 || !strings.Contains(ans, "saved marker") {
+		t.Fatal(ans, p.setups, p.content)
+	}
+	g.route("42", "generate image of a tree")
+	if p.setups != 2 {
+		t.Fatal("repeated ambiguous setup")
+	}
+}
+func TestMediaCompleteSyntheticHandlerRecovery(t *testing.T) {
+	mp := &mockPoster{replies: []string{mediaSSE("", "", "s1"), mediaSSE(splitMedia("data:image/png;base64,"+base64.StdEncoding.EncodeToString(mediaPNG())), "complete", "s1")}}
+	p := &setupFailPoster{base: mp, failSetup: 1}
+	w := newWajo(t, mp)
+	w.P = p
+	w.Media = true
+	w.Images = true
+	w.Get = func(string, int) ([]byte, error) { return nil, nil }
+	d := t.TempDir()
+	g := &extGate{A: w, Owner: "42", PendingFile: filepath.Join(d, "pending.json"), Wait: time.Millisecond}
+	if !runMediaHandler(g, d) {
+		t.Fatal("synthetic handler failed")
+	}
+	if p.content != 1 || p.setups != 2 {
+		t.Fatal("wrong retry semantics")
+	}
+}
+
+type rejectedPhotoTransport struct {
+	albumT
+	photosAttempted int
+}
+
+func (r *rejectedPhotoTransport) PostPhoto(a, b, c, d string, e []byte, f string, g int) ([]byte, error) {
+	r.photosAttempted++
+	return []byte(`{"ok":false}`), nil
+}
+func TestMediaBackgroundUploadFailureReportedOnce(t *testing.T) {
+	tr := &rejectedPhotoTransport{}
+	g := &extGate{Owner: "42"}
+	g.stashImage("42", mediaPNG())
+	var logs []string
+	r := &Runner{T: tr, Chat: &Chat{Ext: g}, StatePath: filepath.Join(t.TempDir(), "state"), Log: func(s string) { logs = append(logs, s) }}
+	r.deliverExt("42", "The picture result is ready.")
+	if tr.photosAttempted != 1 || !strings.Contains(strings.Join(tr.sent, " "), "couldn't confirm the Telegram upload") || !strings.Contains(strings.Join(logs, " "), "unconfirmed") {
+		t.Fatal(tr.photosAttempted, tr.sent, logs)
+	}
+	if len(g.TakeImage("42")) != 0 {
+		t.Fatal("unexpected auto-retry stash")
+	}
+}

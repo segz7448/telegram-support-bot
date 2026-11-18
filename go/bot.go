@@ -987,7 +987,14 @@ func (r *Runner) deliverExt(chat, text string) {
 	}
 	if len(img) > 0 {
 		if ps, ok := r.T.(PhotoSender); ok {
-			ps.PostPhoto(r.API, r.Token, chat, "Generated picture (unchecked)", img, filepath.Dir(r.StatePath), 60)
+			raw, err := ps.PostPhoto(r.API, r.Token, chat, "Generated picture (unchecked)", img, filepath.Dir(r.StatePath), 60)
+			var res map[string]any
+			if err != nil || json.Unmarshal(raw, &res) != nil || res["ok"] != true {
+				r.Log("background photo upload unconfirmed; not retried")
+				call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {chat}, "text": {"The picture came back, but I couldn't confirm the Telegram upload. I won't send it again automatically."}}, 30)
+			} else {
+				r.Log("background photo upload accepted")
+			}
 		}
 	}
 }
