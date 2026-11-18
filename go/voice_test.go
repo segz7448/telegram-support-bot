@@ -211,3 +211,15 @@ func TestVoiceAskErrorRetainsSessionNoRetry(t *testing.T) {
 		t.Fatal("pending duplicate downloaded")
 	}
 }
+
+func TestVoiceTotalMessageBudget(t *testing.T) {
+	u, e := voiceDataURI(voiceFixture(t))
+	if e != nil {
+		t.Fatal(e)
+	}
+	n := len(voicePrompt + u)
+	if n > maxVoiceMessage {
+		t.Fatal(n)
+	}
+	t.Log("full message characters", n)
+}
