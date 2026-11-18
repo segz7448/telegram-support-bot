@@ -47,6 +47,8 @@ func metTools(t *testing.T, m *metF) *Tools {
 	nomLast = time.Time{}
 	var slept []time.Duration
 	nomSleep = func(d time.Duration) { slept = append(slept, d) }
+	wxContact = "https://example.org/contact"
+	t.Cleanup(func() { wxContact = "" })
 	tl := NewTools(m, func(string) {})
 	tl.Now = func() time.Time { return time.Date(2026, 11, 17, 18, 0, 0, 0, time.UTC) }
 	return tl
@@ -57,7 +59,7 @@ func TestMETWeatherForecastSunAndCredits(t *testing.T) {
 	m := &metF{nom: nomLagos, fc: metFC, sun: metSun}
 	tl := metTools(t, m)
 	r := tl.weatherF("lagos", true, false)
-	for _, want := range []string{"Lagos, Nigeria", "27\u00b0C", "partly cloudy", "11 km/h", "Outlook (UTC days)", "2026-11-18: 24 to 31", "thunderstorms around midday", "MET Norway (CC BY 4.0", "OpenStreetMap contributors (ODbL"} {
+	for _, want := range []string{"Nigeria", "27\u00b0C", "partly cloudy", "11 km/h", "Outlook (UTC days)", "2026-11-18: 24 to 31", "thunderstorms around midday", "MET Norway (CC BY 4.0", "OpenStreetMap contributors (ODbL"} {
 		if !strings.Contains(r, want) {
 			t.Fatalf("missing %q in %q", want, r)
 		}
@@ -105,6 +107,7 @@ func TestMETWeatherFailuresAndGeocoderLimit(t *testing.T) {
 	nomSleep = func(d time.Duration) { slept = append(slept, d) }
 	m4 := &metF{nom: nomLagos, fc: metFC}
 	geoCache = map[string]geoHit{}
+	wxContact = "ops@example.org"
 	nomLast = time.Now()
 	tl = NewTools(m4, func(string) {})
 	tl.weatherF("abuja", false, false)
@@ -112,6 +115,7 @@ func TestMETWeatherFailuresAndGeocoderLimit(t *testing.T) {
 		t.Fatalf("no rate wait: %v", slept)
 	}
 	// a plain Fetcher with no header support is refused cleanly
+	wxContact = "ops@example.org"
 	tl = NewTools(&fakeF{}, func(string) {})
 	geoCache = map[string]geoHit{}
 	if r := tl.weatherF("lagos", false, false); !strings.Contains(r, "couldn't reach") {
@@ -123,6 +127,46 @@ func TestSymbolText(t *testing.T) {
 	for in, want := range map[string]string{"clearsky_day": "clear sky", "partlycloudy_night": "partly cloudy", "lightrainshowers_day": "light rain showers", "heavyrainandthunder": "thunderstorms", "fog": "fog", "sleet": "sleet", "weird": "unclear"} {
 		if got := symbolText(in); got != want {
 			t.Errorf("%s: %q want %q", in, got, want)
+		}
+	}
+}
+
+func TestAmbiguousPlaceAsksWhichOne(t *testing.T) {
+	wxLegacy = false
+	amb := `[{"lat":"39.7","lon":"-89.6","name":"Springfield","display_name":"Springfield, Illinois, United States","importance":0.6},
+{"lat":"37.2","lon":"-93.3","name":"Springfield","display_name":"Springfield, Missouri, United States","importance":0.55},
+{"lat":"42.1","lon":"-72.5","name":"Springfield","display_name":"Springfield, Massachusetts, United States","importance":0.2}]`
+	m := &metF{nom: amb, fc: metFC}
+	tl := metTools(t, m)
+	r := tl.weatherF("springfield", false, false)
+	if !strings.Contains(r, "Which one?") || len(m.hits) != 1 {
+		t.Fatalf("%q %v", r, m.hits)
+	}
+	// with a region given, first result is used
+	r = tl.weatherF("springfield, illinois", false, false)
+	if strings.Contains(r, "Which one?") || len(m.hits) != 3 {
+		t.Fatalf("%q %v", r, m.hits)
+	}
+}
+
+func TestWeatherOffWithoutContactAndUserAgentCarriesIt(t *testing.T) {
+	wxLegacy = false
+	m := &metF{nom: nomLagos, fc: metFC}
+	tl := metTools(t, m)
+	wxContact = ""
+	if r := tl.weatherF("lagos", false, false); !strings.Contains(r, "isn't set up") || len(m.hits) != 0 {
+		t.Fatalf("%q %v", r, m.hits)
+	}
+	for _, bad := range []string{"", "no contact", "http://x.org/a", "https://localhost", "a b@c.de"} {
+		if validWxContact(bad) {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+	wxContact = "https://example.org/contact"
+	tl.weatherF("lagos", false, false)
+	for _, h := range m.headers {
+		if h["User-Agent"] != "ZAOBOT/1.0 https://example.org/contact" {
+			t.Fatalf("UA %v", h)
 		}
 	}
 }

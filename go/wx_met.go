@@ -46,6 +46,7 @@ type geoHit struct {
 	Name     string
 	At       time.Time
 	NotFound bool
+	Options  []string // set when several different places match and the asker did not say which
 }
 
 func (t *Tools) hget(u string, sec int) ([]byte, map[string]string, int, error) {
@@ -53,7 +54,24 @@ func (t *Tools) hget(u string, sec int) ([]byte, map[string]string, int, error) 
 	if t.F == nil || !ok {
 		return nil, nil, 0, fmt.Errorf("no network")
 	}
-	return hg.GetWithHeaders(u, map[string]string{"Accept": "application/json"}, sec)
+	return hg.GetWithHeaders(u, map[string]string{"Accept": "application/json", "User-Agent": "ZAOBOT/1.0 " + wxContact}, sec)
+}
+
+// wxContact is the contact MET Norway and OpenStreetMap require in the User-Agent: an email address or a web page where
+// the operator can be reached (TG_WEATHER_CONTACT). It is never guessed: without it weather stays off, because both
+// services say unidentifiable clients get blocked.
+var wxContact string
+
+func validWxContact(s string) bool {
+	if strings.ContainsAny(s, " \t\r\n\"") || len(s) < 8 || len(s) > 120 {
+		return false
+	}
+	if strings.HasPrefix(s, "https://") {
+		u, err := url.Parse(s)
+		return err == nil && strings.Contains(u.Hostname(), ".")
+	}
+	at := strings.Index(s, "@")
+	return at > 0 && strings.Contains(s[at:], ".")
 }
 
 func (t *Tools) geocode(place string) (geoHit, error) {
@@ -68,15 +86,16 @@ func (t *Tools) geocode(place string) (geoHit, error) {
 	}
 	nomLast = time.Now()
 	nomMu.Unlock()
-	b, _, st, err := t.hget(nomBase+"?format=jsonv2&limit=1&q="+url.QueryEscape(place), 15)
+	b, _, st, err := t.hget(nomBase+"?format=jsonv2&limit=5&q="+url.QueryEscape(place), 15)
 	if err != nil || st == 0 || st >= 500 || st == 429 || st == 403 {
 		return geoHit{}, fmt.Errorf("unreachable")
 	}
 	var rs []struct {
-		Lat         string `json:"lat"`
-		Lon         string `json:"lon"`
-		DisplayName string `json:"display_name"`
-		Name        string `json:"name"`
+		Lat         string  `json:"lat"`
+		Lon         string  `json:"lon"`
+		DisplayName string  `json:"display_name"`
+		Name        string  `json:"name"`
+		Importance  float64 `json:"importance"`
 	}
 	if json.Unmarshal(b, &rs) != nil {
 		return geoHit{}, fmt.Errorf("unreachable")
@@ -88,6 +107,24 @@ func (t *Tools) geocode(place string) (geoHit, error) {
 		h.Lat, _ = strconv.ParseFloat(rs[0].Lat, 64)
 		h.Lon, _ = strconv.ParseFloat(rs[0].Lon, 64)
 		h.Name = shortPlace(rs[0].DisplayName, rs[0].Name)
+		// Several different places match and the asker gave no region: ask instead of picking one.
+		if !strings.Contains(place, ",") {
+			seen := map[string]bool{h.Name: true}
+			opts := []string{h.Name}
+			for _, r := range rs[1:] {
+				n := shortPlace(r.DisplayName, r.Name)
+				if !seen[n] && r.Importance >= 0.6*rs[0].Importance {
+					seen[n] = true
+					opts = append(opts, n)
+				}
+			}
+			if len(opts) > 1 {
+				if len(opts) > 3 {
+					opts = opts[:3]
+				}
+				h.Options = opts
+			}
+		}
 		if math.Abs(h.Lat) > 90 || math.Abs(h.Lon) > 180 {
 			return geoHit{}, fmt.Errorf("unreachable")
 		}
@@ -111,7 +148,13 @@ func shortPlace(display, name string) string {
 	if len(parts) == 1 {
 		return first
 	}
-	return first + ", " + strings.TrimSpace(parts[len(parts)-1])
+	out := first
+	if len(parts) >= 3 { // region (state/province) between place and country, so look-alike places differ
+		if reg := strings.TrimSpace(parts[len(parts)-2]); reg != first {
+			out += ", " + reg
+		}
+	}
+	return out + ", " + strings.TrimSpace(parts[len(parts)-1])
 }
 
 var symbolWords = []struct{ k, v string }{
@@ -139,6 +182,9 @@ func symbolText(code string) string {
 }
 
 func (t *Tools) weatherMET(place string, forecast, sun bool) string {
+	if !validWxContact(wxContact) {
+		return "Weather isn't set up on this bot yet: the owner has to give a contact address or web page for the weather services (TG_WEATHER_CONTACT)."
+	}
 	if place == "" || len(place) > 60 {
 		return "Tell me the place, like: weather in Lagos."
 	}
@@ -162,6 +208,9 @@ func (t *Tools) weatherMET(place string, forecast, sun bool) string {
 	}
 	if g.NotFound {
 		return "I couldn't find a place called \"" + place + "\". Try the city name, e.g. weather in Lagos."
+	}
+	if len(g.Options) > 0 {
+		return "Several places match \"" + place + "\": " + strings.Join(g.Options, "; ") + ". Which one? Say it with the country, e.g. weather in " + g.Options[len(g.Options)-1] + "."
 	}
 	lat, lon := strconv.FormatFloat(g.Lat, 'f', 4, 64), strconv.FormatFloat(g.Lon, 'f', 4, 64)
 	var reply string

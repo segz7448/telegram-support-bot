@@ -35,13 +35,29 @@ type feedCache struct {
 type feedDef struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
-	// TermsOK records that the owner said they checked this feed's own terms allow showing its headlines to the
-	// public. The bot cannot judge a publisher's terms, so a feed without it is not served.
-	TermsOK bool `json:"terms_ok,omitempty"`
 }
 
 // feedRestricted lists hosts whose published terms were checked and are personal, non-commercial use only.
 // They are refused for custom feeds unless the owner has switched the news source on (see sources.go).
+// feedVerifiedHosts are hosts whose terms were read and allow showing headlines to the public. It is deliberately empty:
+// no publisher has been verified, so custom feeds are served to the owner's private chat only. Adding a host here is a
+// code change made after reading that publisher's terms, not a chat command.
+var feedVerifiedHosts = []string{}
+
+func feedHostVerified(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	for _, v := range feedVerifiedHosts {
+		if h == v || strings.HasSuffix(h, "."+v) {
+			return !feedHostRestricted(h)
+		}
+	}
+	return false
+}
+
 var feedRestricted = []string{"bbc.co.uk", "bbc.com", "bbci.co.uk"}
 
 func feedHostRestricted(host string) bool {
@@ -67,7 +83,7 @@ const (
 )
 
 var (
-	reFeedAdd    = regexp.MustCompile(`(?i)^\s*(?:add|approve)\s+(?:rss\s+|atom\s+)?feed\s+(https://\S+)\s+as\s+([A-Za-z0-9][A-Za-z0-9 _-]{0,29}?)(\s+terms ok)?\s*$`)
+	reFeedAdd    = regexp.MustCompile(`(?i)^\s*(?:add|approve)\s+(?:rss\s+|atom\s+)?feed\s+(https://\S+)\s+as\s+([A-Za-z0-9][A-Za-z0-9 _-]{0,29}?)\s*$`)
 	reFeedRemove = regexp.MustCompile(`(?i)^\s*(?:remove|delete)\s+feed\s+([A-Za-z0-9][A-Za-z0-9 _-]{0,29}?)\s*$`)
 	reFeedList   = regexp.MustCompile(`(?i)^\s*(?:my\s+|list\s+)?feeds\s*[?.!]?\s*$|^\s*(?:list|show)\s+(?:my\s+)?feeds\s*$`)
 	reFeedShow   = regexp.MustCompile(`(?i)^\s*(?:show\s+|read\s+|get\s+)?feed\s+([A-Za-z0-9][A-Za-z0-9 _-]{0,29}?)\s*$`)
@@ -151,16 +167,13 @@ func (f *Feeds) Handle(chat, text string) (string, bool) {
 		if feedHostRestricted(u.Hostname()) && sourceOff["news"] {
 			return "That publisher's terms allow personal, non-commercial use only, so I won't serve it to the public. Pick a feed whose terms allow public use.", true
 		}
-		if strings.TrimSpace(ma[3]) == "" {
-			return "Before I serve a feed to other people, check that the publisher's terms allow showing its headlines publicly (many feeds are personal use only). If they do, send the same command ending in: terms ok", true
-		}
 		if f.find(ff, ma[2]) != nil {
 			return "A feed called " + ma[2] + " already exists.", true
 		}
 		if len(ff.Feeds) >= feedMax {
 			return fmt.Sprintf("I keep at most %d feeds. Remove one first.", feedMax), true
 		}
-		ff.Feeds = append(ff.Feeds, feedDef{Name: strings.TrimSpace(ma[2]), URL: u.String(), TermsOK: true})
+		ff.Feeds = append(ff.Feeds, feedDef{Name: strings.TrimSpace(ma[2]), URL: u.String()})
 		if saveJSON(f.Path, ff) != nil {
 			return "I couldn't save that change.", true
 		}
@@ -180,8 +193,8 @@ func (f *Feeds) Handle(chat, text string) (string, bool) {
 	if d == nil {
 		return "", false // not ours: "feed the cat" and similar fall through to normal chat
 	}
-	if !d.TermsOK {
-		return "I can't serve feed " + d.Name + " yet: the owner hasn't confirmed its terms allow public use. The owner can re-add it ending in: terms ok", true
+	if chat != f.Owner && !feedHostVerified(d.URL) {
+		return "That feed is switched off for public chats: its publisher's terms haven't been verified for public use.", true
 	}
 	if u, e := url.Parse(d.URL); e == nil && feedHostRestricted(u.Hostname()) && sourceOff["news"] {
 		return "That feed's publisher allows personal, non-commercial use only, so it is switched off.", true
@@ -371,9 +384,6 @@ func (f *Feeds) Items(name string) ([]NewsItem, error) {
 	}
 	if d == nil {
 		return nil, fmt.Errorf("The feed %q is no longer approved, so I can't send this digest. The owner can set daily news again.", name)
-	}
-	if !d.TermsOK {
-		return nil, fmt.Errorf("The feed %q has no confirmed public-use terms, so I can't send this digest.", name)
 	}
 	if u, e := url.Parse(d.URL); e == nil && feedHostRestricted(u.Hostname()) && sourceOff["news"] {
 		return nil, fmt.Errorf("The feed %q is personal-use only, so I can't send this digest.", name)

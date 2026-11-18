@@ -55,3 +55,46 @@ func TestCrossChatIsolation(t *testing.T) {
 		t.Fatalf("non-owner taught a fact: %q", rep)
 	}
 }
+
+func TestPrivateFactsStayPrivateAndPublishIsExplicit(t *testing.T) {
+	dir := t.TempDir()
+	k := &Knowledge{Path: filepath.Join(dir, "k.json"), Owner: "42"}
+	if r, _ := k.Handle("42", "remember that my wifi name is Blue"); !strings.Contains(r, "Private") {
+		t.Fatal(r)
+	}
+	if r, _ := k.Handle("42", "remember publicly that shop hours are 9am to 5pm"); !strings.Contains(r, "Public") {
+		t.Fatal(r)
+	}
+	// a fact saved before the scope field existed has no Public flag, so it is private
+	fs, _ := k.load()
+	fs = append(fs, fact{Key: keyOf("old password hint"), Text: "old password hint is red"})
+	k.save(fs)
+	if r, ok := k.Lookup("7", "what is my wifi name"); ok {
+		t.Fatalf("private fact leaked: %q", r)
+	}
+	if r, ok := k.Lookup("7", "what is old password hint"); ok {
+		t.Fatalf("legacy fact leaked: %q", r)
+	}
+	if r, ok := k.Lookup("7", "what are shop hours"); !ok || !strings.Contains(r, "9am") {
+		t.Fatalf("public fact not served: %q %v", r, ok)
+	}
+	if r, ok := k.Lookup("42", "what is my wifi name"); !ok || !strings.Contains(r, "Blue") {
+		t.Fatalf("owner can't read private: %q", r)
+	}
+	if r, _ := k.Handle("7", "remember publicly that x is y"); strings.Contains(r, "Public:") {
+		t.Fatalf("non-owner published: %q", r)
+	}
+}
+
+func TestGroupChatsGetNoNotesOrReminders(t *testing.T) {
+	dir := t.TempDir()
+	c := &Chat{Notes: &Notes{Path: filepath.Join(dir, "n.json")}, Rem: &Reminders{Path: filepath.Join(dir, "r.json")}}
+	for _, q := range []string{"note: buy milk", "notes", "remind me in 5 minutes to stretch", "my reminders", "my tasks"} {
+		if r := c.Reply("-100123", q); r != groupPrivacyMsg {
+			t.Fatalf("%q in group: %q", q, r)
+		}
+	}
+	if r := c.Reply("55", "note: buy milk"); r == groupPrivacyMsg {
+		t.Fatal("private chat blocked")
+	}
+}

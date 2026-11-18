@@ -30,6 +30,7 @@ func loadSourceGates() {
 		enabled[strings.ToLower(strings.TrimSpace(s))] = true
 	}
 	wxLegacy = enabled["weather_legacy"]
+	wxContact = strings.TrimSpace(os.Getenv("TG_WEATHER_CONTACT"))
 	for _, n := range []string{"news"} {
 		if !enabled[n] {
 			sourceOff[n] = true

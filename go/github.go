@@ -31,8 +31,15 @@ func (c CurlTransport) GetWithHeaders(rawURL string, headers map[string]string, 
 	}
 	var cfg bytes.Buffer
 	fmt.Fprintf(&cfg, "url = \"%s\"\n", cfgEscape(rawURL))
-	fmt.Fprintf(&cfg, "user-agent = \"%s\"\n", cfgEscape(userAgent))
+	ua := userAgent
+	if v := headers["User-Agent"]; v != "" {
+		ua = v
+	}
+	fmt.Fprintf(&cfg, "user-agent = \"%s\"\n", cfgEscape(ua))
 	for k, v := range headers {
+		if k == "User-Agent" {
+			continue
+		}
 		fmt.Fprintf(&cfg, "header = \"%s\"\n", cfgEscape(k+": "+v))
 	}
 	args := []string{"-q", "-sS", "-i", "--connect-timeout", "10", "--max-time", fmt.Sprint(timeoutSec), "--max-filesize", "1000000",

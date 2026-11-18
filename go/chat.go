@@ -710,6 +710,14 @@ func (c *Chat) Reply(chat, text string) string {
 	if r, ok := TextTool(text); ok {
 		return r
 	}
+	if strings.HasPrefix(chat, "-") { // Telegram group/channel ids are negative: members can't be told apart, so no personal data there
+		if _, ok := (&Reminders{}).Handle(chat, text); ok {
+			return groupPrivacyMsg
+		}
+		if _, ok := (&Notes{}).Handle(chat, text); ok {
+			return groupPrivacyMsg
+		}
+	}
 	if c.Rem != nil {
 		if r, ok := c.Rem.Handle(chat, text); ok {
 			return r
@@ -1451,3 +1459,6 @@ func hasSubject(query string, c cand) bool {
 }
 
 var reParen = regexp.MustCompile(`\([^)]*\)`)
+
+// groupPrivacyMsg: notes and reminders are stored per chat, and in a group every member shares the chat, so they stay in private chats.
+const groupPrivacyMsg = "Notes and reminders are personal, so I only keep them in a private chat with me. In a group everyone could read them. Message me directly."

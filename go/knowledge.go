@@ -23,6 +23,9 @@ type fact struct {
 	Key   string `json:"key"`   // normalised subject terms joined by space
 	Text  string `json:"text"`  // the owner's statement, "X is Y"
 	Added string `json:"added"` // UTC date
+	// Public marks a fact the owner deliberately published for everyone. Facts without it (including every fact
+	// saved before this field existed) are private memory: only the owner chat can read them.
+	Public bool `json:"public,omitempty"`
 }
 
 const (
@@ -31,6 +34,7 @@ const (
 )
 
 var (
+	rePublic = regexp.MustCompile(`(?i)^\s*(?:please\s+)?(?:remember|teach|learn)\s+publicly\s+(?:that\s+)?`)
 	reTeach  = regexp.MustCompile(`(?is)^\s*(?:please\s+)?(?:remember|teach(?:\s+you)?|learn|note|correct|correction|update)\s*(?:that|:)?\s*(.+?)\s+(is|are|means|=)\s+(.+?)\s*[.!]?\s*$`)
 	reForget = regexp.MustCompile(`(?is)^\s*(?:please\s+)?forget\s+(?:that\s+|about\s+)?(.+?)\s*[.!]?\s*$`)
 	reListK  = regexp.MustCompile(`(?i)^\s*(?:what do you know|list (?:your |my )?(?:facts|knowledge)|show (?:me )?(?:what you (?:know|remember)|my facts))\s*[?.!]?\s*$`)
@@ -74,6 +78,13 @@ func (k *Knowledge) save(fs []fact) error {
 	return os.Rename(tmp, k.Path)
 }
 
+func scopeNote(public bool) string {
+	if public {
+		return "\n(Public: anyone who asks me can get this answer.)"
+	}
+	return "\n(Private: only you get this answer. To share a fact with everyone, say: remember publicly that ...)"
+}
+
 func keyOf(subject string) string {
 	return strings.Join(terms(subject), " ")
 }
@@ -82,6 +93,11 @@ func keyOf(subject string) string {
 func (k *Knowledge) Handle(chat, text string) (string, bool) {
 	if reWhoami.MatchString(text) {
 		return "Your Telegram id is " + chat + ". The bot owner id is set by the person who runs this bot; I don't show it.", true
+	}
+	public := false
+	if rePublic.MatchString(text) { // "remember publicly that X is Y": the owner publishes this one fact for everyone
+		public = true
+		text = rePublic.ReplaceAllString(text, "remember that ")
 	}
 	isTeach := reTeach.MatchString(text)
 	isForget := reForget.MatchString(text)
@@ -111,7 +127,11 @@ func (k *Knowledge) Handle(chat, text string) (string, bool) {
 				b.WriteString("...and more.")
 				break
 			}
-			fmt.Fprintf(&b, "- %s (taught %s)\n", f.Text, f.Added)
+			sc := "private"
+			if f.Public {
+				sc = "public"
+			}
+			fmt.Fprintf(&b, "- %s (taught %s, %s)\n", f.Text, f.Added, sc)
 		}
 		return strings.TrimSpace(b.String()), true
 	case isForget:
@@ -161,7 +181,7 @@ func (k *Knowledge) Handle(chat, text string) (string, bool) {
 	replaced := false
 	for i := range fs {
 		if fs[i].Key == key {
-			fs[i] = fact{key, statement, k.now().UTC().Format("2006-01-02")}
+			fs[i] = fact{Key: key, Text: statement, Added: k.now().UTC().Format("2006-01-02"), Public: public}
 			replaced = true
 		}
 	}
@@ -169,26 +189,38 @@ func (k *Knowledge) Handle(chat, text string) (string, bool) {
 		if len(fs) >= maxFacts {
 			return fmt.Sprintf("My memory is full (%d facts). Forget something first.", maxFacts), true
 		}
-		fs = append(fs, fact{key, statement, k.now().UTC().Format("2006-01-02")})
+		fs = append(fs, fact{Key: key, Text: statement, Added: k.now().UTC().Format("2006-01-02"), Public: public})
 	}
 	if err := k.save(fs); err != nil {
 		return "I couldn't save that, so I haven't learned it.", true
 	}
 	if replaced {
-		return "Updated: " + statement, true
+		return "Updated: " + statement + scopeNote(public), true
 	}
-	return "Got it, I'll remember: " + statement, true
+	return "Got it, I'll remember: " + statement + scopeNote(public), true
 }
 
 // Lookup answers an owner question from a taught fact. Every key term must appear in the question and the key must
 // cover most of the question's own terms, so "capital of Nigeria" is not answered by a fact about "Nigeria".
 func (k *Knowledge) Lookup(chat, text string) (string, bool) {
-	if !k.isOwner(chat) || !reQWord.MatchString(strings.TrimSpace(text)) {
+	if !k.enabled() || !reQWord.MatchString(strings.TrimSpace(text)) {
 		return "", false
 	}
 	fs, err := k.load()
 	if err != nil || len(fs) == 0 {
 		return "", false
+	}
+	if !k.isOwner(chat) { // everyone else only sees facts the owner published on purpose
+		var pub []fact
+		for _, f := range fs {
+			if f.Public {
+				pub = append(pub, f)
+			}
+		}
+		fs = pub
+		if len(fs) == 0 {
+			return "", false
+		}
 	}
 	q := terms(text)
 	qs := map[string]bool{}
