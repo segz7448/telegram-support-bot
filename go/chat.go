@@ -239,6 +239,7 @@ type convo struct {
 	rest  []string // ranked sentences not yet shown (for "more")
 	srcs  []string
 	seen  int
+	page  *pageSum // last summarised page, for "more detail"
 }
 
 type Chat struct {
@@ -248,6 +249,7 @@ type Chat struct {
 	Res    *Resolver
 	Log    func(string)
 	Now    func() time.Time
+	sumLog map[string][]time.Time // per-chat page-summary times (rate limit)
 	hist   map[string]*convo
 	order  []string
 	Budget time.Duration // total time for search + page fetches
@@ -755,6 +757,9 @@ func (c *Chat) Reply(chat, text string) string {
 		if r, ok := c.News.Handle(chat, text); ok {
 			return r
 		}
+	}
+	if r, ok := c.pageSummary(chat, text, c.state(chat)); ok {
+		return r
 	}
 	if t, ok := githubTopic(text); ok && c.GH != nil {
 		return GitHubReply(c.GH, t, c.Now)

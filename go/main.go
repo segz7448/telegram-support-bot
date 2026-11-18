@@ -80,6 +80,16 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 2 && os.Args[1] == "--summary-check" {
+		ct := CurlTransport{Curl: curlPath}
+		c := NewChat(nil, nil, ct, NewResolver(ct), func(s string) { fmt.Fprintln(os.Stderr, s) })
+		fmt.Println(c.Reply("check", "summarize "+os.Args[2]))
+		if len(os.Args) > 3 {
+			fmt.Println("---- more detail ----")
+			fmt.Println(c.Reply("check", "more detail"))
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--selftest-chat" {
 		if !SelfTestChat(tools, curlPath, func(s string) { fmt.Fprintln(os.Stderr, s) }) {
 			os.Exit(1)
