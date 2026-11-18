@@ -14,7 +14,7 @@ const zaoCan = "In this chat I can: search and quote sources with links, do math
 
 // Founder details the owner gave for ZAO BOT's about answers (public contact details; nothing else is claimed:
 // no company registration, history or role beyond "founder").
-const zaoFounder = "My founder's website: https://novamail.store. Founder profile: https://profile.novamail.store. Contact email: info@novamail.store (I can't read or send email myself, so write to that address directly)."
+const zaoFounder = "ZAO BOT founder's website: https://novamail.store. Founder profile: https://profile.novamail.store. Contact email: info@novamail.store (I can't read or send email myself, so write to that address directly)."
 
 var (
 	reZaoFounder   = regexp.MustCompile(`(?:your|ur) (?:founder|founders)|who (?:founded|started) (?:you|zao|zao bot|this bot|the bot)|^(?:the |zao bots? )?founders?(?: (?:website|profile|email|contact|details|info))?$|^who is the founder$|^(?:the )?founder (?:website|profile|email|contact)|(?:contact|reach|email|e-mail) (?:your |the )?(?:owner|creator|maker|developer|team|support|admin|founder)$|(?:how|where) (?:can|do|could) (?:i|we) (?:contact|reach|email) (?:you|your|the (?:owner|founder|team))|(?:your|ur) (?:contact|email|website)`)
