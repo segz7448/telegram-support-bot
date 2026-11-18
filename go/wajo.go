@@ -31,6 +31,10 @@ type WajoFo struct {
 	Sleep    func(time.Duration)
 	TotalSec int // overall wait; default 100
 	LastConv string
+	// Trace, if set, receives one short diagnostic line per step (stage, status, lengths, HTTP codes). Never URLs, keys or reply text.
+	Trace func(string)
+	// Progress, if set, is told the conversation id and stage each time they change, so they can be saved.
+	Progress func(conv, stage, part1 string)
 }
 
 const wajoDefaultURL = "https://mcp.api.wajo.ai/fo"
@@ -159,6 +163,18 @@ func imageSubject(t string) string {
 	return out
 }
 
+func (w *WajoFo) tr(f string, a ...any) {
+	if w.Trace != nil {
+		w.Trace(fmt.Sprintf(f, a...))
+	}
+}
+
+func (w *WajoFo) prog(conv, stage, part1 string) {
+	if w.Progress != nil {
+		w.Progress(conv, stage, part1)
+	}
+}
+
 func (w *WajoFo) deadline() time.Time {
 	total := w.TotalSec
 	if total <= 0 {
@@ -201,7 +217,7 @@ func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
 		if sub == "" {
 			return ExtReply{Text: "Tell me what the picture should show."}, nil
 		}
-		res, err := w.call("ask_fo", map[string]any{"message": "Generate an image of: " + sub + "\nOnly make the image and reply with a short caption. Do not take any other action.", "newConversation": true}, 70)
+		res, err := w.call("ask_fo", map[string]any{"message": "Generate an image of: " + sub + "\nOnly make the image and reply with a short caption. Do not take any other action.", "newConversation": true}, 130)
 		if err != nil {
 			return ExtReply{}, err
 		}
@@ -210,6 +226,8 @@ func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
 			return ExtReply{}, fmt.Errorf("no conversation")
 		}
 		w.LastConv = conv
+		w.prog(conv, stGen, "")
+		w.tr("stage=gen ask sent status=%s resp_len=%d", res.Result.StructuredContent.Status, len(respText(res)))
 		res, done, err := w.settle(res, conv, dl)
 		if err != nil {
 			return ExtReply{}, err
@@ -219,7 +237,7 @@ func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
 		}
 		return w.resume(conv, stGen, "", res, dl)
 	}
-	res, err := w.call("ask_fo", map[string]any{"message": fmt.Sprintf(wajoPreamble, r.Text), "newConversation": true}, 70)
+	res, err := w.call("ask_fo", map[string]any{"message": fmt.Sprintf(wajoPreamble, r.Text), "newConversation": true}, 130)
 	if err != nil {
 		return ExtReply{}, err
 	}
@@ -228,6 +246,8 @@ func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
 	if conv == "" && res.Result.StructuredContent.Status == "working" {
 		return ExtReply{}, fmt.Errorf("no conversation")
 	}
+	w.prog(conv, stText, "")
+	w.tr("stage=text ask sent status=%s resp_len=%d", res.Result.StructuredContent.Status, len(respText(res)))
 	res, done, err := w.settle(res, conv, dl)
 	if err != nil {
 		return ExtReply{}, err
@@ -263,6 +283,7 @@ func (w *WajoFo) resume(conv, stage, part1 string, cur *rpcResp, dl time.Time) (
 			return ExtReply{Pending: conv, Stage: stage, Part1: part1}, nil
 		}
 	}
+	w.tr("resume stage=%s status=%s resp_len=%d", stage, cur.Result.StructuredContent.Status, len(respText(cur)))
 	switch stage {
 	case stText:
 		t, ok := w.txtOut(cur)
@@ -277,7 +298,8 @@ func (w *WajoFo) resume(conv, stage, part1 string, cur *rpcResp, dl time.Time) (
 		if !w.CanImages() {
 			return ExtReply{Text: "The picture was made but I can't fetch it here."}, nil
 		}
-		res, err := w.call("ask_fo", map[string]any{"conversationId": conv, "message": fmt.Sprintf(wajoFirstAsk, firstPartChars)}, 70)
+		w.prog(conv, stWait1, "")
+		res, err := w.call("ask_fo", map[string]any{"conversationId": conv, "message": fmt.Sprintf(wajoFirstAsk, firstPartChars)}, 130)
 		if err != nil {
 			return ExtReply{}, err
 		}
@@ -295,10 +317,12 @@ func (w *WajoFo) resume(conv, stage, part1 string, cur *rpcResp, dl time.Time) (
 			return ExtReply{Text: extActionNote}, nil
 		}
 		p1 := reGCSURL.FindString(strings.NewReplacer("`", " ").Replace(t))
+		w.tr("stage=wait1 part1_len=%d resp_len=%d https_gcs_prefix=%v", len(p1), len(t), strings.HasPrefix(p1, "https://storage.googleapis.com/"))
 		if !strings.HasPrefix(p1, "https://storage.googleapis.com/") || len(p1) < 100 {
 			return ExtReply{Text: imgFail}, nil
 		}
-		res, err := w.call("ask_fo", map[string]any{"conversationId": conv, "message": fmt.Sprintf(wajoRestAsk, len(p1))}, 70)
+		w.prog(conv, stWait2, p1)
+		res, err := w.call("ask_fo", map[string]any{"conversationId": conv, "message": fmt.Sprintf(wajoRestAsk, len(p1))}, 130)
 		if err != nil {
 			return ExtReply{}, err
 		}
@@ -315,13 +339,20 @@ func (w *WajoFo) resume(conv, stage, part1 string, cur *rpcResp, dl time.Time) (
 		if !ok {
 			return ExtReply{Text: extActionNote}, nil
 		}
-		p2 := reTokenOnly.FindString(strings.NewReplacer("`", " ").Replace(t))
+		p2 := longestToken(strings.NewReplacer("`", " ").Replace(t))
 		link := joinLink(part1, p2)
+		w.tr("stage=wait2 part1_len=%d part2_len=%d joined_ok=%v joined_len=%d sig_hex=%d", len(part1), len(p2), link != "", len(link), sigHexLen(part1+p2))
 		if link == "" {
 			return ExtReply{Text: imgFail}, nil
 		}
 		b, err := w.Get(link, 8<<20)
-		if err != nil || len(b) < 16 || len(b) > 8<<20 || !(bytes.HasPrefix(b, []byte("\x89PNG")) || bytes.HasPrefix(b, []byte{0xFF, 0xD8, 0xFF})) {
+		if err != nil {
+			w.tr("stage=download failed: %v", err)
+			return ExtReply{Text: imgFail}, nil
+		}
+		magic := len(b) >= 16 && (bytes.HasPrefix(b, []byte("\x89PNG")) || bytes.HasPrefix(b, []byte{0xFF, 0xD8, 0xFF}))
+		w.tr("stage=download bytes=%d image_magic=%v", len(b), magic)
+		if !magic || len(b) > 8<<20 {
 			return ExtReply{Text: imgFail}, nil
 		}
 		return ExtReply{Text: "Here is the picture.", Image: b}, nil
@@ -330,6 +361,13 @@ func (w *WajoFo) resume(conv, stage, part1 string, cur *rpcResp, dl time.Time) (
 }
 
 const imgFail = "The picture was made, but I couldn't fetch it. I won't make another one by myself."
+
+func sigHexLen(s string) int {
+	if m := reSig.FindStringSubmatch(s); m != nil {
+		return len(m[1])
+	}
+	return 0
+}
 
 var reSig = regexp.MustCompile(`X-Goog-Signature=([0-9a-fA-F]+)$`)
 
@@ -358,27 +396,94 @@ func joinLink(p1, p2 string) string {
 
 // Collect resumes a saved request by polling its conversation (nothing is re-asked at the stage it saved).
 func (w *WajoFo) Collect(p extPending) (ExtReply, error) {
+	w.tr("collect stage=%s", p.Stage)
 	return w.resume(p.Conv, p.Stage, p.Part1, nil, w.deadline())
 }
 
 // fetchImageBytes downloads a signed image link with curl: https only, a size cap, no credentials, no redirects.
+// Errors name the curl exit status or HTTP status only (never the link).
 func fetchImageBytes(ct CurlTransport) func(string, int) ([]byte, error) {
 	return func(rawURL string, maxBytes int) ([]byte, error) {
 		curl, err := resolveCurl(ct.Curl)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("no curl")
 		}
 		var cfg bytes.Buffer
 		fmt.Fprintf(&cfg, "url = \"%s\"\n", cfgEscape(rawURL))
-		args := []string{"-q", "-sS", "--connect-timeout", "10", "--max-time", "40", "--max-filesize", fmt.Sprint(maxBytes),
-			"--proto", "=https", "--fail", "-K", "-"}
+		args := []string{"-q", "-sS", "--connect-timeout", "10", "--max-time", "60", "--max-filesize", fmt.Sprint(maxBytes),
+			"--proto", "=https", "-w", "\n%{http_code}", "-K", "-"}
 		cmd := curlCommand(curl, args...)
 		cmd.Stdin = &cfg
-		var out bytes.Buffer
-		cmd.Stdout = &out
+		var out, eb bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &eb
 		if err := cmd.Run(); err != nil {
-			return nil, fmt.Errorf("download failed")
+			msg := strings.ReplaceAll(strings.TrimSpace(eb.String()), rawURL, "<link>")
+			if len(msg) > 120 {
+				msg = msg[:120]
+			}
+			return nil, fmt.Errorf("curl error: %v %s", err, msg)
 		}
-		return out.Bytes(), nil
+		b := out.Bytes()
+		i := bytes.LastIndexByte(b, '\n')
+		if i < 0 {
+			return nil, fmt.Errorf("bad curl output")
+		}
+		code := strings.TrimSpace(string(b[i+1:]))
+		if code != "200" {
+			return nil, fmt.Errorf("http %s, %d bytes", code, i)
+		}
+		return b[:i], nil
 	}
+}
+
+// SetProgress lets the gate save stage changes as they happen.
+func (w *WajoFo) SetProgress(f func(conv, stage, part1 string)) { w.Progress = f }
+
+// rawCall returns the generic JSON result object of a tool call (used by the read-only diagnostics).
+func (w *WajoFo) rawCall(tool string, args map[string]any) (map[string]any, error) {
+	k, err := w.key()
+	if err != nil {
+		return nil, err
+	}
+	u := w.URL
+	if u == "" {
+		u = wajoDefaultURL
+	}
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": tool, "arguments": args}})
+	out, code, err := w.P.PostJSON(u, map[string]string{"X-API-Key": k, "Accept": "application/json, text/event-stream"}, body, 70)
+	if err != nil {
+		return nil, fmt.Errorf("request failed")
+	}
+	if code != 200 {
+		return nil, fmt.Errorf("http %d", code)
+	}
+	var last []byte
+	for _, ln := range bytes.Split(out, []byte("\n")) {
+		if ln = bytes.TrimSpace(ln); bytes.HasPrefix(ln, []byte("data:")) {
+			last = bytes.TrimSpace(ln[5:])
+		}
+	}
+	if last == nil {
+		last = bytes.TrimSpace(out)
+	}
+	var env struct {
+		Result map[string]any `json:"result"`
+		Error  any            `json:"error"`
+	}
+	if json.Unmarshal(last, &env) != nil || env.Error != nil || env.Result == nil {
+		return nil, fmt.Errorf("bad reply")
+	}
+	return env.Result, nil
+}
+
+// longestToken picks the longest link-like token in a reply (the remainder of a link is far longer than any word
+// the service may put around it).
+func longestToken(s string) string {
+	best := ""
+	for _, m := range reTokenOnly.FindAllString(s, -1) {
+		if len(m) > len(best) {
+			best = m
+		}
+	}
+	return best
 }

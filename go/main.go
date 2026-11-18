@@ -43,8 +43,24 @@ func main() {
 	}
 	curlPath := os.Getenv("TG_CURL")
 	tools := NewTools(CurlTransport{Curl: curlPath}, func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
-	if len(os.Args) > 2 && os.Args[1] == "--selftest-ext" && (os.Args[2] == "text" || os.Args[2] == "image") { // live service, no Telegram
-		if !SelfTestExt(CurlTransport{Curl: curlPath}, os.Args[2]) {
+	if len(os.Args) > 2 && os.Args[1] == "--selftest-ext" { // live service, no Telegram
+		ct := CurlTransport{Curl: curlPath}
+		ok := false
+		switch {
+		case os.Args[2] == "text" || os.Args[2] == "image":
+			ok = SelfTestExt(ct, os.Args[2])
+		case os.Args[2] == "inspect":
+			conv := ""
+			if len(os.Args) > 3 {
+				conv = os.Args[3]
+			}
+			ok = SelfTestExtInspect(ct, conv)
+		case os.Args[2] == "fetch" && len(os.Args) > 3:
+			ok = SelfTestExtFetch(ct, os.Args[3])
+		default:
+			fmt.Println("usage: --selftest-ext text | image | inspect [conversationId] | fetch <link-file>")
+		}
+		if !ok {
 			os.Exit(1)
 		}
 		return
@@ -179,7 +195,7 @@ func main() {
 			if v, err := strconv.Atoi(os.Getenv("TG_EXT_PER_DAY")); err == nil && v > 0 {
 				per = v
 			}
-			wf := &WajoFo{P: CurlTransport{Curl: curl}, URL: os.Getenv("TG_EXT_URL"), KeyFile: os.Getenv("TG_EXT_KEY_FILE")}
+			wf := &WajoFo{P: CurlTransport{Curl: curl}, URL: os.Getenv("TG_EXT_URL"), KeyFile: os.Getenv("TG_EXT_KEY_FILE"), TotalSec: 600, Trace: func(l string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), "ext:", l) }}
 			if os.Getenv("TG_EXT_IMAGES") == "1" { // pictures need their own switch
 				wf.Images, wf.Get = true, fetchImageBytes(CurlTransport{Curl: curl})
 			}

@@ -64,9 +64,12 @@ type extGate struct {
 	// PendingFile saves at most one running request (owner id, service conversation id, start time; no key, no text).
 	PendingFile string
 	img         map[string][]byte // at most one picture waiting to be sent per chat
-	mu          sync.Mutex
-	day         string
-	used        int
+	// Wait is how long a request is awaited inline before it carries on in the background (default 25 s).
+	Wait time.Duration
+	job  *extJob
+	mu   sync.Mutex
+	day  string
+	used int
 }
 
 var (
@@ -135,9 +138,12 @@ func (g *extGate) route(chat, text string) (reply string, img []byte, handled bo
 	if !g.take() {
 		return "The daily limit for outside-assistant requests is used up. It resets tomorrow.", nil, true
 	}
-	r, err := g.A.Ask(ExtRequest{Text: t, Image: wantImg})
-	txt, img := g.shape(r, err)
-	g.stashImage(chat, img)
+	g.beginPending("", "asking", "") // saved BEFORE the ask: if the process dies now, the ask may or may not have been accepted
+	j := g.startJob(func(prog func(conv, stage, part1 string)) (ExtReply, error) {
+		g.setProgress(prog)
+		return g.A.Ask(ExtRequest{Text: t, Image: wantImg})
+	})
+	txt, img := g.await(chat, j)
 	return txt, img, true
 }
 
@@ -164,7 +170,7 @@ func (g *extGate) loadPending() *extPending {
 		return nil
 	}
 	var p extPending
-	if json.Unmarshal(b, &p) != nil || p.Conv == "" || p.Owner != g.Owner {
+	if json.Unmarshal(b, &p) != nil || (p.Conv == "" && p.Stage != "asking") || p.Owner != g.Owner {
 		return nil // another owner's or damaged record is never used
 	}
 	return &p
@@ -215,34 +221,123 @@ func (g *extGate) shape(r ExtReply, err error) (string, []byte) {
 	return fmt.Sprintf("Unchecked, may be wrong:\n%s", ans), r.Image
 }
 
-// pendingCmd handles "check answer" / "drop it" for the owner when a saved request exists.
+// extJob is one request running in the background so the bot keeps answering other messages while it waits.
+type extJob struct {
+	done    chan struct{}
+	r       ExtReply
+	err     error
+	dropped bool
+}
+
+func (g *extGate) wait() time.Duration {
+	if g.Wait > 0 {
+		return g.Wait
+	}
+	return 25 * time.Second
+}
+
+// beginPending writes the first saved record for a request (conversation id still unknown while stage is "asking").
+func (g *extGate) beginPending(conv, stage, part1 string) { g.savePending(conv, stage, part1) }
+
+// setProgress wires the client so every stage change is saved as it happens.
+func (g *extGate) setProgress(f func(conv, stage, part1 string)) {
+	if wf, ok := g.A.(interface {
+		SetProgress(func(conv, stage, part1 string))
+	}); ok {
+		wf.SetProgress(f)
+	}
+}
+
+func (g *extGate) startJob(run func(prog func(conv, stage, part1 string)) (ExtReply, error)) *extJob {
+	j := &extJob{done: make(chan struct{})}
+	g.mu.Lock()
+	g.job = j
+	g.mu.Unlock()
+	go func() {
+		j.r, j.err = run(func(conv, stage, part1 string) {
+			if !j.dropped {
+				g.savePending(conv, stage, part1)
+			}
+		})
+		close(j.done)
+	}()
+	return j
+}
+
+const extStillWorking = "Still working. It is running in the background and I'm still answering your other messages. Say \"check answer\" to collect it, or \"drop it\" to forget it. I won't re-send the request."
+
+// await waits a bounded time for the job, then either returns its result or says it is still running.
+func (g *extGate) await(chat string, j *extJob) (string, []byte) {
+	select {
+	case <-j.done:
+	case <-time.After(g.wait()):
+		return extStillWorking, nil
+	}
+	g.mu.Lock()
+	if g.job == j {
+		g.job = nil
+	}
+	g.mu.Unlock()
+	if j.dropped {
+		return "Dropped.", nil
+	}
+	r, err := j.r, j.err
+	if err != nil {
+		if p := g.loadPending(); p != nil && p.Conv != "" {
+			return "I couldn't reach the outside assistant just now. The request is still saved. Say \"check answer\" to try collecting it again, or \"drop it\".", nil
+		}
+		g.clearPending()
+		return "I couldn't get an answer. I can't tell whether it started working on the request, and I won't send it again by myself. Ask again if you want a new attempt.", nil
+	}
+	if r.Pending != "" {
+		g.savePending(r.Pending, r.Stage, r.Part1)
+		return extStillWorking, nil
+	}
+	g.clearPending()
+	t, img := g.shape(r, nil)
+	g.stashImage(chat, img)
+	return t, img
+}
+
+// pendingCmd handles "check answer" / "drop it" for the owner.
 func (g *extGate) pendingCmd(chat, text string) (string, []byte, bool) {
 	if !g.allowed(chat) || (!reExtCheck.MatchString(text) && !reExtDrop.MatchString(text)) {
 		return "", nil, false
 	}
+	g.mu.Lock()
+	j := g.job
+	g.mu.Unlock()
 	p := g.loadPending()
-	if p == nil {
-		return "", nil, false // nothing saved: carry on locally
+	if j == nil && p == nil {
+		return "", nil, false // nothing saved or running: carry on locally
 	}
 	if reExtDrop.MatchString(text) {
+		if j != nil {
+			j.dropped = true
+			g.mu.Lock()
+			g.job = nil
+			g.mu.Unlock()
+		}
 		g.clearPending()
-		return "Dropped. I forgot the pending request. The outside assistant may still finish it on its side.", nil, true
+		return "Dropped. I forgot the pending request. The service may still finish it on its side.", nil, true
+	}
+	if j != nil {
+		t, img := g.await(chat, j)
+		return t, img, true
+	}
+	if p.Conv == "" || p.Stage == "asking" {
+		return "That request was started before the bot restarted or lost its connection, and I never learned its id, so I can't collect it and can't tell whether it was accepted. I won't send it again by myself. Say \"drop it\" and ask again if you want a new attempt.", nil, true
 	}
 	c, ok := g.A.(Collector)
 	if !ok {
 		return "I can't collect that here.", nil, true
 	}
-	r, err := c.Collect(*p)
-	if err != nil {
-		return "I couldn't reach the outside assistant to collect it. The request is still saved. Try \"check answer\" again later, or \"drop it\".", nil, true
-	}
-	if r.Pending != "" {
-		g.savePending(r.Pending, r.Stage, r.Part1) // keep the stage and any saved part
-		return "Still working. Say \"check answer\" again later.", nil, true
-	}
-	g.clearPending()
-	t, img := g.shape(r, nil)
-	g.stashImage(chat, img)
+	pp := *p
+	j = g.startJob(func(prog func(conv, stage, part1 string)) (ExtReply, error) {
+		g.setProgress(prog)
+		return c.Collect(pp)
+	})
+	t, img := g.await(chat, j)
 	return t, img, true
 }
 

@@ -277,3 +277,95 @@ func TestWajoImageSubjectWithActionRefusedLocally(t *testing.T) {
 		t.Fatalf("%q calls=%d", r, len(m.calls))
 	}
 }
+
+type slowPoster struct {
+	mockPoster
+	gate chan struct{}
+}
+
+func (s *slowPoster) PostJSON(u string, h map[string]string, body []byte, to int) ([]byte, int, error) {
+	<-s.gate
+	return s.mockPoster.PostJSON(u, h, body, to)
+}
+
+func TestExtSlowRequestRunsInBackground(t *testing.T) {
+	sp := &slowPoster{mockPoster: mockPoster{replies: []string{sse("Late answer", "complete", "cB")}}, gate: make(chan struct{})}
+	kf := filepath.Join(t.TempDir(), "k")
+	os.WriteFile(kf, []byte("wak_TESTKEY\n"), 0o600)
+	w := &WajoFo{P: sp, KeyFile: kf, TotalSec: 30}
+	pf := filepath.Join(t.TempDir(), "p.json")
+	g := &extGate{A: w, Owner: "42", PerDay: 5, PendingFile: pf, Wait: 50 * time.Millisecond}
+	start := time.Now()
+	r, _, _ := g.route("42", "write a detailed plan for the whole month")
+	if time.Since(start) > 2*time.Second || !strings.Contains(r, "Still working") {
+		t.Fatalf("blocked or wrong: %v %q", time.Since(start), r)
+	}
+	// ask not yet answered: the record exists with an unknown conversation id (ambiguity kept)
+	if p := g.loadPending(); p == nil || p.Stage != "asking" || p.Conv != "" {
+		t.Fatalf("pending: %+v", p)
+	}
+	// a second request is refused while it runs
+	r2, _, _ := g.route("42", "explain the risks of the other plan in detail")
+	if !strings.Contains(r2, "still saved") {
+		t.Fatalf("%q", r2)
+	}
+	close(sp.gate) // service answers
+	time.Sleep(200 * time.Millisecond)
+	r3, _, _ := g.route("42", "check answer")
+	if !strings.Contains(r3, "Late answer") || g.loadPending() != nil {
+		t.Fatalf("%q", r3)
+	}
+}
+
+func TestExtRestartKeepsAmbiguity(t *testing.T) {
+	m := &mockPoster{replies: []string{"{}"}}
+	w := newWajo(t, m)
+	pf := filepath.Join(t.TempDir(), "p.json")
+	g := &extGate{A: w, Owner: "42", PerDay: 5, PendingFile: pf}
+	g.savePending("", "asking", "") // as left by a killed process
+	r, _, _ := g.route("42", "check answer")
+	if !strings.Contains(r, "can't tell whether it was accepted") || len(m.calls) != 0 {
+		t.Fatalf("%q calls=%d", r, len(m.calls))
+	}
+	r, _, _ = g.route("42", "explain the risks of this plan in detail")
+	if !strings.Contains(r, "still saved") || len(m.calls) != 0 {
+		t.Fatalf("new ask not blocked: %q", r)
+	}
+	g.route("42", "drop it")
+	if g.loadPending() != nil {
+		t.Fatal("not dropped")
+	}
+}
+
+func TestWajoTraceHasNoSecrets(t *testing.T) {
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 40)...)
+	l := imgLink()
+	m := &mockPoster{replies: []string{sse("made", "complete", "c1"), sse(l[:598], "complete", "c1"), sse(l[598:], "complete", "c1")}}
+	w := newWajo(t, m)
+	w.Images = true
+	w.Get = func(string, int) ([]byte, error) { return png, nil }
+	var lines []string
+	w.Trace = func(s string) { lines = append(lines, s) }
+	g := &extGate{A: w, Owner: "42", PerDay: 5}
+	g.route("42", "generate image of a dog")
+	all := strings.Join(lines, "\n")
+	if !strings.Contains(all, "stage=wait2") || !strings.Contains(all, "sig_hex=512") || !strings.Contains(all, "image_magic=true") {
+		t.Fatalf("trace missing detail:\n%s", all)
+	}
+	if strings.Contains(all, "googleapis") || strings.Contains(all, "wak_") || strings.Contains(all, "a1a1a1") {
+		t.Fatal("trace leaks link or key")
+	}
+}
+
+func TestWajoRemainderWithProseAround(t *testing.T) {
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 40)...)
+	l := imgLink()
+	m := &mockPoster{replies: []string{sse("made", "complete", "c1"), sse("Here is the first part:\n`"+l[:598]+"`", "complete", "c1"), sse("Here are the remaining characters: `"+l[598:]+"` Hope that helps.", "complete", "c1")}}
+	w := newWajo(t, m)
+	w.Images = true
+	w.Get = func(u string, max int) ([]byte, error) { return png, nil }
+	g := &extGate{A: w, Owner: "42", PerDay: 5}
+	if _, img, _ := g.route("42", "generate image of a dog"); len(img) == 0 {
+		t.Fatal("prose around the link parts broke retrieval")
+	}
+}
