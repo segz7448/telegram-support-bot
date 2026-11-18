@@ -121,3 +121,9 @@ func TestTTSMalformedOutput(t *testing.T) {
 		t.Fatal("crc")
 	}
 }
+func TestTTSAcceptActualPhoneOutput(t *testing.T) {
+	b, e := os.ReadFile("testdata/tts-phone.ogg")
+	if e != nil || validateSpeechOGG(b) != nil {
+		t.Fatal(e)
+	}
+}
