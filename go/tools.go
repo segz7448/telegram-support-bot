@@ -88,7 +88,7 @@ func NewTools(f Fetcher, log func(string)) *Tools {
 		cache:   map[string]cacheEntry{}}
 }
 
-const helpGeneral = "I'm a chat bot running on a phone. I'm not a language model and I can't reason: I match what you say to things I can do, search the web, read a few pages, and quote the most relevant sentences with their links. So I can be wrong or miss the point; check the links. Say \"more\" after an answer for more from the same pages.\n" +
+const helpGeneral = "I'm ZAO BOT, a chat bot running on a phone. I search the web, read a few pages and quote the most relevant sentences with their links, and I can also calculate, convert, play games, edit photos and keep notes and reminders. I can be wrong or miss the point, so check the links. Say \"more\" after an answer for more from the same pages.\n" +
 	"Maths and stats: 12*(3+4), 15% of 80, percent change from 50 to 75, mean of 3, 5, 8, standard deviation of 2 4 4 5.\n" +
 	"Dates and time: days until 2026-12-25, what day is 2027-03-01, 30 days from today, time in Tokyo, convert 3 pm New York to Lagos. Dates use UTC unless the owner set a time zone; I say which one I used.\n" +
 	"Calculator script (numbers only, no files or network): calc script: let s = 0; for i = 1 to 10 { s = s + i }; print s\n" +

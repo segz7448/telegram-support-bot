@@ -63,6 +63,23 @@ func main() {
 		fmt.Println("news/github selftest passed (MOCKED transport)")
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "--selftest-weather" {
+		if !SelfTestWeather(func(s string) { fmt.Fprintln(os.Stderr, s) }) {
+			os.Exit(1)
+		}
+		fmt.Println("weather selftest passed (MOCKED transport)")
+		return
+	}
+	if len(os.Args) > 2 && os.Args[1] == "--weather-check" {
+		mode := ""
+		if len(os.Args) > 3 {
+			mode = os.Args[3]
+		}
+		if !WeatherCheck(tools, os.Args[2], mode) {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--selftest-chat" {
 		if !SelfTestChat(tools, curlPath, func(s string) { fmt.Fprintln(os.Stderr, s) }) {
 			os.Exit(1)
