@@ -462,6 +462,9 @@ func (n *News) cmdSet(chat, rest string) string {
 	}
 	topicPart := reNewsAt.ReplaceAllString(rest, " ")
 	section, query := parseSection(topicPart)
+	if m, off := gateOff("news"); off {
+		return m
+	}
 	if strings.TrimSpace(topicPart) == "" {
 		section, query = "top", ""
 	}
@@ -567,6 +570,9 @@ func (n *News) Tick(now time.Time) []NewsSend {
 	target := time.Date(ln.Year(), ln.Month(), ln.Day(), s.Hour, s.Min, 0, 0, loc)
 	if ln.Before(target) {
 		return nil
+	}
+	if _, isFeed := strings.CutPrefix(s.Section, "feed:"); !isFeed && sourceOff["news"] {
+		return nil // a BBC schedule left over from before: send nothing, contact nothing
 	}
 	s.LastDate = today // persisted BEFORE any sending
 	if err := n.save(s); err != nil {

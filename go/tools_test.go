@@ -222,7 +222,7 @@ func TestRunnerRoutingKeepsBrainFirst(t *testing.T) {
 	if got := r.reply("/help", "c"); !strings.Contains(got, "wiki") {
 		t.Error(got)
 	}
-	if got := r.reply("/start", "c"); !strings.HasPrefix(got, "Hello!") {
+	if got := r.reply("/start", "c"); !strings.HasPrefix(got, "Hello, I'm ZAO BOT") {
 		t.Error(got)
 	}
 	if got := r.reply("who is Alan Turing", "c"); !strings.Contains(got, "Wikipedia - Alan Turing") {

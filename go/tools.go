@@ -126,9 +126,10 @@ func (t *Tools) Command(text string) (string, bool) {
 	if t.General {
 		h = helpGeneral
 	}
+	h = filterHelp(h)
 	switch strings.SplitN(f[0], "@", 2)[0] {
 	case "/start":
-		return "Hello! Ask me anything.\n\n" + h, true
+		return "Hello, I'm ZAO BOT. Ask me anything.\n\n" + h, true
 	case "/help":
 		return h, true
 	}

@@ -18,6 +18,19 @@ func loadSourceGates() {
 			sourceOff[s] = true
 		}
 	}
+	// Public/business audience: these two sources' terms do not allow it, so they are OFF unless the owner names them
+	// in TG_ENABLE_SOURCES (only for a deployment whose use the terms allow, e.g. strictly personal).
+	//   weather: Open-Meteo's free geocoding is non-commercial only; wttr.in publishes no terms.
+	//   news: BBC terms allow its content/RSS for personal, non-commercial use only.
+	enabled := map[string]bool{}
+	for _, s := range strings.Split(os.Getenv("TG_ENABLE_SOURCES"), ",") {
+		enabled[strings.ToLower(strings.TrimSpace(s))] = true
+	}
+	for _, n := range []string{"weather", "news"} {
+		if !enabled[n] {
+			sourceOff[n] = true
+		}
+	}
 }
 
 var sourceNames = map[string]string{
@@ -35,5 +48,5 @@ func gateOff(name string) (string, bool) {
 	if !sourceOff[name] {
 		return "", false
 	}
-	return sourceNames[name] + " are switched off on this bot.", true
+	return sourceNames[name] + " are not available on this bot.", true
 }
