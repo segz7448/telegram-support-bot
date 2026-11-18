@@ -88,6 +88,16 @@ func SelfTestFiles(outDir string) bool {
 		m, ff := buildFileReply("code", "zip", c.body)
 		check(c.n, ff == nil && strings.Contains(m, "Nothing was sent"), "")
 	}
+	_, f = buildFileReply("doc", "pdf", sampleLayout)
+	if f != nil {
+		t, _ := pdfText(f.Data)
+		check("pdf-layout-table-headings", strings.Contains(t, "Layout Check") && strings.Contains(t, "5,743") && strings.Contains(t, "\u2022 Second bullet"), save(&OutFile{Name: "layout.pdf", Data: f.Data}))
+	}
+	_, f = buildFileReply("doc", "docx", sampleLayout)
+	if f != nil {
+		dt, _ := docxText(f.Data)
+		check("docx-layout-table", strings.Contains(dt, "5,743") && strings.Contains(string(f.Data), "PK"), save(&OutFile{Name: "layout.docx", Data: f.Data}))
+	}
 	// desk: upload memory, local requests, inline conversion
 	d := newFileDesk()
 	up := "line one apple\nline two banana\nline three apple pie\n" + strings.Repeat("filler text here\n", 200)
@@ -133,3 +143,6 @@ func SelfTestFiles(outDir string) bool {
 	}
 	return allOK
 }
+
+// sampleLayout is a fixed text with headings, bullets and a table, used to check layout (not content truth).
+const sampleLayout = "# Layout Check\n\nIntro paragraph for the layout check.\n\n## Table\n\n| Years | Rate | Result |\n|---|---|---|\n| 10 | 6% | 1,790 |\n| 20 | 6% | 3,207 |\n| 30 | 6% | 5,743 |\n\n### Notes\n\n- First bullet with some words that are long enough to wrap onto a second line when the page is narrow enough for it to happen here.\n- Second bullet\n\nClosing paragraph.\n"

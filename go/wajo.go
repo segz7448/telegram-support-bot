@@ -217,7 +217,7 @@ func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
 	if r.Kind != "" {
 		var msg string
 		if r.Kind == "doc" {
-			msg = "Write the text of this document: " + r.Text + "\nOutput ONLY the document text (headings with # and plain paragraphs), no introduction, no notes after it, no links, at most 1500 words. Do not take any other action."
+			msg = "Write the text of this document: " + r.Text + "\nOutput ONLY the document text (headings with # and plain paragraphs), no introduction, no notes after it, no links, at most 1500 words. Use only facts you are sure of. Do not state calculated figures unless they are exact, and say when something is an estimate. Tables may use | pipe rows. Do not take any other action."
 		} else {
 			msg = "Create the files for this project: " + r.Text + "\nOutput ONLY the files. Start each file with a line exactly like === FILE: relative/path.ext === followed by the file contents, and finish with a line exactly === END ===. Plain text files only, at most 20 files, no secrets, keys or credentials, nothing that has to be installed outside the files. Do not take any other action."
 		}

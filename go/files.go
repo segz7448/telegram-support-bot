@@ -172,18 +172,52 @@ func makeDocx(title, text string) ([]byte, error) {
 	if title != "" {
 		para(title, true, 36)
 	}
-	for _, ln := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
-		t := strings.TrimRight(ln, " \t")
-		switch {
-		case strings.HasPrefix(t, "# "):
-			para(strings.TrimPrefix(t, "# "), true, 32)
-		case strings.HasPrefix(t, "## "):
-			para(strings.TrimPrefix(t, "## "), true, 28)
-		case strings.HasPrefix(t, "### "):
-			para(strings.TrimPrefix(t, "### "), true, 24)
-		default:
-			t = strings.NewReplacer("**", "", "__", "").Replace(t)
-			para(t, false, 0)
+	for _, blk := range splitBlocks(text) {
+		if blk.rows != nil {
+			n := 0
+			for _, r := range blk.rows {
+				if len(r) > n {
+					n = len(r)
+				}
+			}
+			body.WriteString(`<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders>`)
+			for _, e := range []string{"top", "left", "bottom", "right", "insideH", "insideV"} {
+				fmt.Fprintf(&body, `<w:%s w:val="single" w:sz="4" w:space="0" w:color="808080"/>`, e)
+			}
+			body.WriteString(`</w:tblBorders></w:tblPr>`)
+			for ri, r := range blk.rows {
+				body.WriteString("<w:tr>")
+				for i := 0; i < n; i++ {
+					c := ""
+					if i < len(r) {
+						c = r[i]
+					}
+					rpr := ""
+					if ri == 0 && len(blk.rows) > 1 {
+						rpr = "<w:rPr><w:b/></w:rPr>"
+					}
+					fmt.Fprintf(&body, `<w:tc><w:p><w:r>%s<w:t xml:space="preserve">%s</w:t></w:r></w:p></w:tc>`, rpr, xmlEsc(c))
+				}
+				body.WriteString("</w:tr>")
+			}
+			body.WriteString(`</w:tbl><w:p/>`)
+			continue
+		}
+		for _, ln := range blk.lines {
+			t := strings.TrimRight(ln, " \t")
+			switch {
+			case strings.HasPrefix(t, "# "):
+				para(strings.TrimPrefix(t, "# "), true, 32)
+			case strings.HasPrefix(t, "## "):
+				para(strings.TrimPrefix(t, "## "), true, 28)
+			case strings.HasPrefix(t, "### "):
+				para(strings.TrimPrefix(t, "### "), true, 24)
+			case strings.HasPrefix(strings.TrimSpace(t), "- "), strings.HasPrefix(strings.TrimSpace(t), "* "):
+				fmt.Fprintf(&body, `<w:p><w:pPr><w:ind w:left="360" w:hanging="240"/></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p>`, xmlEsc("\u2022 "+strings.NewReplacer("**", "", "__", "").Replace(strings.TrimSpace(t)[2:])))
+			default:
+				t = strings.NewReplacer("**", "", "__", "").Replace(t)
+				para(t, false, 0)
+			}
 		}
 	}
 	files := map[string]string{
@@ -236,45 +270,217 @@ func pdfEsc(s string) (out string, bad []rune) {
 	return b.String(), bad
 }
 
-// makePDF writes a plain multi-page PDF (Helvetica, 11 pt, wrapped at 90 columns, A4). It covers ASCII, Latin-1
-// accents and common Windows punctuation. Text with other characters (CJK, Cyrillic, emoji, arrows) is refused with
-// a pdfCharsError instead of being written with "?" in place of them.
-func makePDF(title, text string) ([]byte, error) {
-	var lines []string
-	wrap := func(s string, w int) {
-		for _, ln := range strings.Split(s, "\n") {
-			ln = strings.TrimRight(strings.NewReplacer("**", "", "__", "", "# ", "", "## ", "", "### ", "").Replace(ln), " \t")
-			rs := []rune(ln)
-			for len(rs) > w {
-				cut := strings.LastIndex(string(rs[:w]), " ")
-				if cut >= 0 {
-					cut = len([]rune(string(rs[:w])[:cut]))
-				}
-				if cut < 20 {
-					cut = w
-				}
-				lines = append(lines, string(rs[:cut]))
-				rs = []rune(strings.TrimLeft(string(rs[cut:]), " "))
+type pdfLine struct {
+	s      string
+	font   int // 1 regular, 2 bold, 3 mono
+	size   float64
+	lead   float64
+	indent float64
+}
+
+var (
+	reMDTableRow = regexp.MustCompile(`^\s*\|.*\|\s*$`)
+	reMDTableSep = regexp.MustCompile(`^\s*\|?[\s:|-]+\|?\s*$`)
+)
+
+func tableCells(ln string) []string {
+	ln = strings.TrimSpace(ln)
+	ln = strings.TrimPrefix(ln, "|")
+	ln = strings.TrimSuffix(ln, "|")
+	var out []string
+	for _, c := range strings.Split(ln, "|") {
+		out = append(out, strings.TrimSpace(strings.NewReplacer("**", "", "__", "", "`", "").Replace(c)))
+	}
+	return out
+}
+
+// parseTables splits text into runs of markdown table rows (rows != nil) and other lines.
+type textBlock struct {
+	rows  [][]string
+	lines []string
+}
+
+func splitBlocks(text string) []textBlock {
+	var out []textBlock
+	var cur *textBlock
+	for _, ln := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		if reMDTableRow.MatchString(ln) {
+			if cur == nil || cur.rows == nil {
+				out = append(out, textBlock{rows: [][]string{}})
+				cur = &out[len(out)-1]
 			}
-			lines = append(lines, string(rs))
+			if strings.Contains(ln, "-") && reMDTableSep.MatchString(ln) && !strings.ContainsAny(strings.NewReplacer("-", "", ":", "", "|", "", " ", "", "\t", "").Replace(ln), "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") {
+				continue
+			}
+			cur.rows = append(cur.rows, tableCells(ln))
+			continue
 		}
+		if cur == nil || cur.rows != nil {
+			out = append(out, textBlock{})
+			cur = &out[len(out)-1]
+		}
+		cur.lines = append(cur.lines, ln)
+	}
+	return out
+}
+
+func wrapRunes(ln string, w int) []string {
+	var out []string
+	rs := []rune(ln)
+	for len(rs) > w {
+		cut := strings.LastIndex(string(rs[:w]), " ")
+		if cut >= 0 {
+			cut = len([]rune(string(rs[:w])[:cut]))
+		}
+		if cut < 20 {
+			cut = w
+		}
+		out = append(out, string(rs[:cut]))
+		rs = []rune(strings.TrimLeft(string(rs[cut:]), " "))
+	}
+	return append(out, string(rs))
+}
+
+// makePDF writes a multi-page A4 PDF with headings (bold, larger), bullets, and markdown tables laid out in aligned
+// columns that are kept together on a page. Fonts are the standard Helvetica, Helvetica-Bold and Courier with
+// WinAnsiEncoding: ASCII, Latin-1 accents and common Windows punctuation. Text with other characters is refused with a
+// pdfCharsError instead of being written with "?" in place of them.
+func makePDF(title, text string) ([]byte, error) {
+	var pages [][]pdfLine // each page is a list of lines; a line with s == "\f" never occurs
+	var cur []pdfLine
+	y := 800.0
+	newPage := func() {
+		if len(cur) > 0 {
+			pages = append(pages, cur)
+		}
+		cur, y = nil, 800.0
+	}
+	add := func(l pdfLine) {
+		if y-l.lead < 50 {
+			newPage()
+		}
+		y -= l.lead
+		l.lead = y // reuse as absolute baseline
+		cur = append(cur, l)
+	}
+	clean := func(s string) string {
+		return strings.TrimRight(strings.NewReplacer("**", "", "__", "", "`", "").Replace(s), " \t")
 	}
 	if title != "" {
-		wrap(title, 90)
-		lines = append(lines, "")
+		add(pdfLine{clean(title), 2, 18, 24, 0})
 	}
-	wrap(strings.ReplaceAll(text, "\r\n", "\n"), 90)
-	const perPage = 52
-	var pages [][]string
-	for i := 0; i < len(lines); i += perPage {
-		j := i + perPage
-		if j > len(lines) {
-			j = len(lines)
+	for _, blk := range splitBlocks(text) {
+		if blk.rows != nil {
+			rows := blk.rows
+			n := 0
+			for _, r := range rows {
+				if len(r) > n {
+					n = len(r)
+				}
+			}
+			widths := make([]int, n)
+			for _, r := range rows {
+				for i, c := range r {
+					if l := len([]rune(c)); l > widths[i] {
+						widths[i] = l
+					}
+				}
+			}
+			total := 4 * (n - 1)
+			for _, w := range widths {
+				total += w
+			}
+			var tl []pdfLine
+			if total <= 86 {
+				pad := func(r []string) string {
+					var b strings.Builder
+					for i := 0; i < n; i++ {
+						c := ""
+						if i < len(r) {
+							c = r[i]
+						}
+						b.WriteString(c + strings.Repeat(" ", widths[i]-len([]rune(c))))
+						if i < n-1 {
+							b.WriteString("    ")
+						}
+					}
+					return strings.TrimRight(b.String(), " ")
+				}
+				for i, r := range rows {
+					tl = append(tl, pdfLine{pad(r), map[bool]int{true: 2, false: 3}[i == 0 && len(rows) > 1], 9.5, 13, 0})
+					if i == 0 && len(rows) > 1 {
+						tl = append(tl, pdfLine{strings.Repeat("-", total), 3, 9.5, 11, 0})
+					}
+				}
+			} else { // too wide for columns: one "header: value" line per row, nothing is cut
+				for i, r := range rows {
+					if i == 0 && len(rows) > 1 {
+						continue
+					}
+					var parts []string
+					for j, c := range r {
+						h := ""
+						if len(rows) > 1 && j < len(rows[0]) {
+							h = rows[0][j] + ": "
+						}
+						parts = append(parts, h+c)
+					}
+					for k, w := range wrapRunes("* "+strings.Join(parts, "; "), 88) {
+						ind := 0.0
+						if k > 0 {
+							ind = 14
+						}
+						tl = append(tl, pdfLine{w, 1, 10.5, 14, ind})
+					}
+				}
+			}
+			need := 0.0
+			for _, l := range tl {
+				need += l.lead
+			}
+			if need <= 700 && y-need < 50 {
+				newPage()
+			}
+			for _, l := range tl {
+				add(l)
+			}
+			add(pdfLine{"", 1, 11, 6, 0})
+			continue
 		}
-		pages = append(pages, lines[i:j])
+		for _, ln := range blk.lines {
+			t := strings.TrimRight(ln, " \t")
+			switch {
+			case strings.TrimSpace(t) == "":
+				add(pdfLine{"", 1, 11, 8, 0})
+			case strings.HasPrefix(t, "# "), strings.HasPrefix(t, "## "), strings.HasPrefix(t, "### "):
+				lvl := strings.IndexByte(t, ' ')
+				size, lead := map[int][2]float64{1: {18, 26}, 2: {14, 20}, 3: {12, 17}}[lvl][0], map[int][2]float64{1: {18, 26}, 2: {14, 20}, 3: {12, 17}}[lvl][1]
+				h := clean(t[lvl+1:])
+				wrapW := int(88 * 11 / size)
+				for _, w := range wrapRunes(h, wrapW) {
+					add(pdfLine{w, 2, size, lead, 0})
+				}
+			case strings.HasPrefix(strings.TrimSpace(t), "- "), strings.HasPrefix(strings.TrimSpace(t), "* "):
+				body := clean(strings.TrimSpace(t)[2:])
+				for k, w := range wrapRunes(body, 84) {
+					if k == 0 {
+						add(pdfLine{"\u2022 " + w, 1, 11, 14, 8})
+					} else {
+						add(pdfLine{w, 1, 11, 14, 22})
+					}
+				}
+			default:
+				for _, w := range wrapRunes(clean(t), 90) {
+					add(pdfLine{w, 1, 11, 14, 0})
+				}
+			}
+		}
+	}
+	if len(cur) > 0 {
+		pages = append(pages, cur)
 	}
 	if len(pages) == 0 {
-		pages = [][]string{{""}}
+		pages = [][]pdfLine{{}}
 	}
 	if len(pages) > 80 {
 		return nil, fmt.Errorf("too long for a PDF (over 80 pages)")
@@ -291,20 +497,23 @@ func makePDF(title, text string) ([]byte, error) {
 	obj("<< /Type /Catalog /Pages 2 0 R >>")
 	var kids []string
 	for i := 0; i < n; i++ {
-		kids = append(kids, fmt.Sprintf("%d 0 R", 4+i*2))
+		kids = append(kids, fmt.Sprintf("%d 0 R", 6+i*2))
 	}
 	obj(fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), n))
 	obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+	obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
+	obj("<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>")
 	for i, pg := range pages {
-		obj(fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>", 5+i*2))
+		obj(fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents %d 0 R >>", 7+i*2))
 		var c strings.Builder
-		c.WriteString("BT /F1 11 Tf 14 TL 50 800 Td\n")
-		for _, ln := range pg {
-			e, bad := pdfEsc(ln)
+		for _, l := range pg {
+			if l.s == "" {
+				continue
+			}
+			e, bad := pdfEsc(l.s)
 			badAll = append(badAll, bad...)
-			fmt.Fprintf(&c, "(%s) Tj T*\n", e)
+			fmt.Fprintf(&c, "BT /F%d %.1f Tf %.1f %.1f Td (%s) Tj ET\n", l.font, l.size, 50+l.indent, l.lead, e)
 		}
-		c.WriteString("ET")
 		obj(fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", c.Len(), c.String()))
 	}
 	if len(badAll) > 0 {
