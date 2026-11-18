@@ -8,7 +8,6 @@ import (
 	"math"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -36,7 +35,7 @@ func (c CurlTransport) Get(rawURL string, timeoutSec int) ([]byte, int, error) {
 	fmt.Fprintf(&cfg, "user-agent = \"%s\"\n", cfgEscape(userAgent))
 	args := []string{"-q", "-sS", "--connect-timeout", "10", "--max-time", fmt.Sprint(timeoutSec), "--max-filesize", "1000000",
 		"--proto", "=https", "--location", "--max-redirs", "2", "--proto-redir", "=https", "-w", "\n%{http_code}", "-K", "-"}
-	cmd := exec.Command(curl, args...)
+	cmd := curlCommand(curl, args...)
 	cmd.Stdin = &cfg
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

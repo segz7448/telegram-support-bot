@@ -7,7 +7,6 @@ import (
 	"math"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -51,7 +50,7 @@ func (c CurlTransport) PostJSON(rawURL string, headers map[string]string, body [
 	fmt.Fprintf(&cfg, "data-binary = \"%s\"\n", cfgEscape(string(body)))
 	args := []string{"-q", "-sS", "--connect-timeout", "10", "--max-time", fmt.Sprint(timeoutSec), "--max-filesize", "1000000",
 		"--proto", "=https", "--noproxy", "*", "-w", "\n%{http_code}", "-K", "-"}
-	cmd := exec.Command(curl, args...)
+	cmd := curlCommand(curl, args...)
 	cmd.Stdin = &cfg
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -44,7 +43,7 @@ func (c CurlTransport) GetWithHeaders(rawURL string, headers map[string]string, 
 	}
 	args := []string{"-q", "-sS", "-i", "--connect-timeout", "10", "--max-time", fmt.Sprint(timeoutSec), "--max-filesize", "1000000",
 		"--proto", "=https", "--noproxy", "*", "-K", "-"}
-	cmd := exec.Command(curl, args...)
+	cmd := curlCommand(curl, args...)
 	cmd.Stdin = &cfg
 	var out bytes.Buffer
 	cmd.Stdout = &out

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -54,7 +53,7 @@ func (c CurlTransport) GetOnce(rawURL, pinIP string, timeoutSec int) (PageResult
 	fmt.Fprintf(&cfg, "noproxy = \"*\"\n")
 	args := []string{"-q", "-sS", "--connect-timeout", "10", "--max-time", fmt.Sprint(timeoutSec), "--max-filesize", "1000000",
 		"--proto", "=https", "--ipv4", "--compressed", "-w", metaMark + "%{http_code}|%{redirect_url}|%{remote_ip}|%{content_type}", "-K", "-"}
-	cmd := exec.Command(curl, args...)
+	cmd := curlCommand(curl, args...)
 	cmd.Stdin = &cfg
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

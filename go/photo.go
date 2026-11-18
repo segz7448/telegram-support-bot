@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -53,7 +52,7 @@ func (c CurlTransport) PostPhotoMarkup(api, token, chatID, caption, markup strin
 		args = append(args, "--proto", "=https", "--proto-redir", "=https")
 	}
 	args = append(args, "-K", "-")
-	cmd := exec.Command(curl, args...)
+	cmd := curlCommand(curl, args...)
 	cmd.Stdin = &cfg
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -79,7 +78,7 @@ func (c CurlTransport) GetFile(api, token, filePath string, maxBytes int, timeou
 		args = append(args, "--proto", "=https", "--proto-redir", "=https")
 	}
 	args = append(args, "-K", "-")
-	cmd := exec.Command(curl, args...)
+	cmd := curlCommand(curl, args...)
 	cmd.Stdin = &cfg
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

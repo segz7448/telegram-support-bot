@@ -9,7 +9,6 @@ import (
 	"math"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -104,7 +103,7 @@ func (c CurlTransport) Post(api, token, method string, params url.Values, timeou
 		args = append(args, "--proto", "=https", "--proto-redir", "=https")
 	}
 	args = append(args, "-K", "-")
-	cmd := exec.Command(curl, args...)
+	cmd := curlCommand(curl, args...)
 	cmd.Stdin = &cfg
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
