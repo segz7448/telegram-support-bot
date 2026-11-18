@@ -28,6 +28,8 @@ type GameMenu struct {
 
 const gmPrefix = "gm:"
 
+var reGmFactual = regexp.MustCompile(`\b(?:history|videos?|store|download|cast|score|scores|rules|invented|awards?|streaming|stream|review|reviews|wiki|meaning|definition|theory|console|release|price)\b`)
+
 var (
 	reGmLead   = `(?:(?:hey|hi|hello|ok|okay|so|well|yo|please|pls|ayo)[ ,]+)*`
 	reGmAsk    = regexp.MustCompile(`^` + reGmLead + `(?:(?:let ?s|let us|can we|could we|shall we|should we|how about we|do you want to|you wanna|you want to|i want to|i wanna|i would like to|i d like to|i feel like|wanna|want to|lets|im bored lets|i m bored let s)\s+)?play(?: with me| together)?(?: (?:a|an|some|another|one|any|the))?(?: (?:game|games|fun game|quick game|little game|board game|something|anything|something fun|a game))?(?: with me| together| now| please| pls| with you)*$|^` + reGmLead + `(?:games?|game time|play time|play a game|games please|show (?:me )?(?:the )?games|list (?:the |your )?games|(?:what|which) games(?: (?:do you (?:have|know|play)|can you play|can we play|are there|you got|do you got))?|do you (?:have|know|play) (?:any )?games|any games|im bored|i m bored|i am bored|entertain me|something fun)$`)
@@ -168,7 +170,7 @@ func (m *GameMenu) Handle(chat, text string) (*ChessReply, bool) {
 		}
 		return m.menu(chat, "You have no game in progress."), true
 	}
-	if c, p, k := intentNB.classify(text); c == "games" && p >= clsMinP && k >= clsMinKnown && len(strings.Fields(t)) >= 2 && len(strings.Fields(t)) <= 12 {
+	if c, p, k := intentNB.classify(text); c == "games" && clsGuard(text) && !reGmFactual.MatchString(t) && p >= clsMinP && k >= clsMinKnown && len(strings.Fields(t)) >= 2 && len(strings.Fields(t)) <= 12 {
 		return m.menu(chat, ""), true
 	}
 	if m.recent(chat) {

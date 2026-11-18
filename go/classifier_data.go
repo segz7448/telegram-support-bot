@@ -67,6 +67,7 @@ var intentTraining = map[string][]string{
 		"book a flight for me", "order groceries", "message my brother", "share this on instagram", "set the thermostat",
 	},
 	"search": {
+		"let us play videos history", "what are lets play videos", "who started lets play videos", "play store download problems", "games released in 2020", "best selling games of all time", "how much does a game console cost", "the history of video games",
 		"how hot is the sun", "why does it rain", "what causes thunder", "who was the first president of the united states", "what is the capital of kenya",
 		"history of the roman empire", "how far is the moon", "what is photosynthesis", "who wrote hamlet", "when was the telephone invented",
 		"how do airplanes fly", "what is the population of india", "who won the world cup in 2018", "what does dna stand for", "how many people live in lagos",

@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"regexp"
 	"strings"
 )
 
@@ -112,6 +113,9 @@ func classifyHint(text string) (string, bool) {
 	if len(text) > 160 || len(strings.Fields(text)) < 2 {
 		return "", false
 	}
+	if !clsGuard(text) {
+		return "", false
+	}
 	c, p, known := intentNB.classify(text)
 	if c == "" || c == "search" || p < clsMinP || known < clsMinKnown {
 		return "", false
@@ -121,4 +125,14 @@ func classifyHint(text string) (string, bool) {
 		return "", false
 	}
 	return h, true
+}
+
+// Questions that open with a question word are treated as search questions unless they match one of these everyday
+// shapes. This keeps "what is the distance between the earth and the moon" from being read as a request for news.
+var reClsWh = regexp.MustCompile(`^(?:who|whom|whose|when|where|why|how|which|what)\b`)
+var reClsWhOK = regexp.MustCompile(`^(?:what (?:is|s) (?:happening|going on|new|up with you|it like outside|the (?:weather|temperature|news|latest)(?: like)?(?: today| outside| right now)?|a (?:quarter|half|third|tenth|fifth) of \d+|\d+ (?:percent|plus|minus|times|divided)|\d+ percent of \d+)|what are (?:you up to|the (?:top|main) stories|you doing)|what can we play|what do you want to play|how (?:hot|cold|warm|cool) is it(?: outside| today| right now)?|how is (?:the weather|your (?:day|evening|morning)(?: going)?|it going)|how was your day|how are things(?: with you)?|how much is \d+|how many (?:seconds|minutes|hours|feet|inches|ounces|centimetres|centimeters|litres|liters) in (?:a|an|one|\d+))\b`)
+
+func clsGuard(text string) bool {
+	t := gmNorm(text)
+	return !reClsWh.MatchString(t) || reClsWhOK.MatchString(t)
 }
