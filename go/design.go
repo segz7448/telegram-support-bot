@@ -154,7 +154,12 @@ func cleanDesignText(s string) string {
 	return strings.Join(strings.Fields(strings.NewReplacer("\u201c", "\"", "\u201d", "\"", "\u2018", "'", "\u2019", "'", "\u2014", "-", "\u2013", "-").Replace(s)), " ")
 }
 
+var reDesignNat = regexp.MustCompile(`(?is)^(?:please )?(?:can you |could you )?(?:draw|make|create|generate|design|give)(?: me)?(?: a| an)? (pie chart|bar chart|line chart|quote card|poster|banner)(?: of| with| for| saying| that says)?[ :,-]*(.+)$`)
+
 func Design(text string) (png []byte, caption string, errMsg string, ok bool) {
+	if m := reDesignNat.FindStringSubmatch(strings.TrimSpace(text)); m != nil && !reDesign.MatchString(text) {
+		text = strings.ToLower(m[1]) + ": " + strings.TrimSpace(m[2])
+	}
 	m := reDesign.FindStringSubmatch(text)
 	if m == nil {
 		return nil, "", "", false

@@ -675,6 +675,13 @@ func (r *Runner) Run() error {
 						}
 						if okc {
 							reply = cr.Text
+							if len(cr.PNG) == 0 && cr.Markup != "" {
+								if _, err := call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(cid)}, "text": {cr.Text}, "reply_markup": {cr.Markup}}, 30); err == nil {
+									replies++
+									r.Log(fmt.Sprintf("reply sent (total %d, game menu)", replies))
+									sent = true
+								}
+							}
 							if len(cr.PNG) > 0 {
 								if ps, okp := r.T.(PhotoSender); okp {
 									done := false

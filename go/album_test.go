@@ -16,6 +16,7 @@ import (
 
 // albumT is a scripted Telegram: each getUpdates call returns the next batch and advances a fake clock.
 type albumT struct {
+	markups []string
 	batches [][]map[string]any
 	steps   []time.Duration
 	i       int
@@ -42,6 +43,9 @@ func (a *albumT) Post(api, token, method string, p url.Values, to int) ([]byte, 
 		return []byte(`{"ok":true,"result":{"file_path":"photos/x.jpg"}}`), nil
 	case "sendMessage":
 		a.sent = append(a.sent, p.Get("text"))
+		if mk := p.Get("reply_markup"); mk != "" {
+			a.markups = append(a.markups, mk)
+		}
 	}
 	return []byte(`{"ok":true,"result":{}}`), nil
 }

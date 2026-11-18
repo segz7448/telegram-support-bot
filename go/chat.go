@@ -240,6 +240,8 @@ type convo struct {
 	srcs  []string
 	seen  int
 	page  *pageSum // last summarised page, for "more detail"
+	last  string   // this chat's latest message, and the one before it (for "what did I just say")
+	prev  string
 }
 
 type Chat struct {
@@ -712,6 +714,18 @@ func (c *Chat) Reply(chat, text string) string {
 	if r, ok := identityReply(text); ok {
 		return r
 	}
+	for _, g := range c.Games {
+		if gm, isMenu := g.(*GameMenu); isMenu {
+			if cr, ok := gm.Handle(chat, text); ok {
+				return cr.Text
+			}
+		}
+	}
+	{
+		sc := c.state(chat)
+		sc.prev, sc.last = sc.last, text
+	}
+	text = nlRewrite(text)
 	if r, ok := TextTool(text); ok {
 		return r
 	}
@@ -771,6 +785,9 @@ func (c *Chat) Reply(chat, text string) string {
 	st := c.state(chat)
 	low := strings.ToLower(text)
 	if _, r, ok := smallTalk(low); ok {
+		return r
+	}
+	if r, ok := c.dialogue(chat, text, st); ok {
 		return r
 	}
 	if reMore.MatchString(low) {
