@@ -266,6 +266,7 @@ type Chat struct {
 	Games  []GameHandler // every board game, in lookup order (chess first)
 	Notes  *Notes        // per-chat notes and tasks with tags (nil = off)
 	Admin  *Admin        // owner status/export and per-chat rate limit (nil = off)
+	Ext    *extGate      // owner-only outside assistant (nil = off)
 }
 
 func NewChat(s, w Searcher, pf PageFetcher, res *Resolver, log func(string)) *Chat {
@@ -711,6 +712,11 @@ func (c *Chat) Reply(chat, text string) string {
 			return r
 		}
 	}
+	if c.Ext != nil {
+		if r, ok := c.Ext.action(chat, text); ok {
+			return r
+		}
+	}
 	if r, ok := identityReply(text); ok {
 		return r
 	}
@@ -793,6 +799,11 @@ func (c *Chat) Reply(chat, text string) string {
 	}
 	if t, ok := githubTopic(text); ok && c.GH != nil {
 		return GitHubReply(c.GH, t, c.Now)
+	}
+	if c.Ext != nil {
+		if r, _, ok := c.Ext.route(chat, text); ok {
+			return r
+		}
 	}
 	text = normWW(text)
 	st := c.state(chat)
