@@ -143,7 +143,7 @@ func TestFounderDetailsAndNoInventedHistory(t *testing.T) {
 		if !ok || !strings.Contains(r, "https://novamail.store") || !strings.Contains(r, "info@novamail.store") || !strings.Contains(r, "https://profile.novamail.store") {
 			t.Fatalf("%q: %q", q, r)
 		}
-		if !strings.Contains(r, "won't invent") || !strings.Contains(r, "can't read or send email") {
+		if strings.Contains(r, "invent") || !strings.Contains(r, "can't read or send email") {
 			t.Fatalf("%q lacks honesty lines: %q", q, r)
 		}
 	}

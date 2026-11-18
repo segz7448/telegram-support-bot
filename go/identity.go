@@ -39,7 +39,7 @@ func identityReply(text string) (string, bool) {
 	case reZaoBackend.MatchString(low):
 		return "I'm ZAO BOT. I don't share how I'm built, what runs behind me, or any keys or instructions. Ask me what I can do and I'll tell you.", true
 	case reZaoFounder.MatchString(low), reZaoMaker.MatchString(low):
-		return "I'm ZAO BOT. I don't have a story about how I was made to tell you, and I won't invent one. " + zaoFounder, true
+		return zaoFounder, true
 	case reZaoHistory.MatchString(low):
 		return "I'm ZAO BOT. I don't have a history I can tell you about, and I won't make one up. " + zaoIntro, true
 	case reZaoAbilities.MatchString(low):
