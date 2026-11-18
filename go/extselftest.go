@@ -179,3 +179,37 @@ func keysOf(m map[string]any) []string {
 	}
 	return k
 }
+
+// SelfTestExtLink repairs picture retrieval on an EXISTING conversation: no picture request is sent. It only asks for a
+// fresh link in two parts (the same two asks the bot makes), downloads, and checks the bytes.
+func SelfTestExtLink(ct CurlTransport, conv string) bool {
+	kf := os.Getenv("TG_EXT_KEY_FILE")
+	if kf == "" || conv == "" {
+		fmt.Println("FAIL need TG_EXT_KEY_FILE and a conversation id")
+		return false
+	}
+	out := os.Getenv("TG_EXT_OUT_DIR")
+	if out == "" {
+		out = os.TempDir()
+	}
+	wf := &WajoFo{P: ct, URL: os.Getenv("TG_EXT_URL"), KeyFile: kf, Images: true, Get: fetchImageBytes(ct), TotalSec: 300, Trace: func(l string) { fmt.Println("TRACE", time.Now().Format("15:04:05"), l) }}
+	r, err := wf.Collect(extPending{Conv: conv, Stage: stGen})
+	if err != nil {
+		fmt.Println("FAIL", err)
+		return false
+	}
+	if len(r.Image) == 0 {
+		fmt.Println("FAIL no image;", strings.Join(strings.Fields(r.Text), " "), "pending:", r.Pending != "", r.Stage)
+		return false
+	}
+	cfg, format, derr := image.DecodeConfig(bytes.NewReader(r.Image))
+	if derr != nil {
+		fmt.Println("FAIL bytes do not decode")
+		return false
+	}
+	sum := sha256.Sum256(r.Image)
+	name := filepath.Join(out, fmt.Sprintf("ext-link-%x.%s", sum[:4], format))
+	os.WriteFile(name, r.Image, 0o600)
+	fmt.Printf("PASS %s %dx%d, %d bytes, sha256 %x, saved %s\n", format, cfg.Width, cfg.Height, len(r.Image), sum, name)
+	return true
+}

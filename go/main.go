@@ -55,10 +55,12 @@ func main() {
 				conv = os.Args[3]
 			}
 			ok = SelfTestExtInspect(ct, conv)
+		case os.Args[2] == "link" && len(os.Args) > 3:
+			ok = SelfTestExtLink(ct, os.Args[3])
 		case os.Args[2] == "fetch" && len(os.Args) > 3:
 			ok = SelfTestExtFetch(ct, os.Args[3])
 		default:
-			fmt.Println("usage: --selftest-ext text | image | inspect [conversationId] | fetch <link-file>")
+			fmt.Println("usage: --selftest-ext text | image | inspect [conversationId] | link <conversationId> | fetch <link-file>")
 		}
 		if !ok {
 			os.Exit(1)
