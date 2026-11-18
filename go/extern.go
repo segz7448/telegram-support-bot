@@ -59,6 +59,7 @@ type extGate struct {
 	Now    func() time.Time
 	// PendingFile saves at most one running request (owner id, service conversation id, start time; no key, no text).
 	PendingFile string
+	img         map[string][]byte // at most one picture waiting to be sent per chat
 	mu          sync.Mutex
 	day         string
 	used        int
@@ -129,6 +130,7 @@ func (g *extGate) route(chat, text string) (reply string, img []byte, handled bo
 	}
 	r, err := g.A.Ask(ExtRequest{Text: t, Image: wantImg})
 	txt, img := g.shape(r, err)
+	g.stashImage(chat, img)
 	return txt, img, true
 }
 
@@ -232,5 +234,31 @@ func (g *extGate) pendingCmd(chat, text string) (string, []byte, bool) {
 	}
 	g.clearPending()
 	t, img := g.shape(r, nil)
+	g.stashImage(chat, img)
 	return t, img, true
+}
+
+func (g *extGate) stashImage(chat string, b []byte) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.img == nil {
+		g.img = map[string][]byte{}
+	}
+	if len(b) > 0 {
+		g.img[chat] = b
+	} else {
+		delete(g.img, chat)
+	}
+}
+
+// TakeImage returns and clears the picture waiting for this chat (the sender uploads it as a photo).
+func (g *extGate) TakeImage(chat string) []byte {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	b := g.img[chat]
+	delete(g.img, chat)
+	return b
 }

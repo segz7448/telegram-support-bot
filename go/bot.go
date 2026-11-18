@@ -735,6 +735,24 @@ func (r *Runner) Run() error {
 					}
 					if reply == "" && !sent {
 						reply = r.reply(text, fmt.Sprint(cid))
+						if r.Chat != nil && r.Chat.Ext != nil {
+							if img := r.Chat.Ext.TakeImage(fmt.Sprint(cid)); len(img) > 0 {
+								ok := false
+								if ps, okp := r.T.(PhotoSender); okp {
+									raw, perr := ps.PostPhoto(r.API, r.Token, fmt.Sprint(cid), "Picture from the outside assistant (unchecked)", img, filepath.Dir(r.StatePath), 60)
+									var body map[string]any
+									if perr == nil && json.Unmarshal(raw, &body) == nil {
+										ok, _ = body["ok"].(bool)
+									}
+								}
+								if ok {
+									replies++
+									r.Log(fmt.Sprintf("reply sent (total %d, outside picture)", replies))
+								} else {
+									reply += "\n(I got a picture but couldn't upload it.)"
+								}
+							}
+						}
 					}
 					if reply == "" {
 						sent = true // rate-limited: stay quiet instead of sending an empty message

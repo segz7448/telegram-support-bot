@@ -120,6 +120,35 @@ func (w *WajoFo) CanImages() bool { return w.Images && w.Get != nil }
 
 var reWajoActionOut = regexp.MustCompile(`(?i)(?:ACTION_REFUSED|\bi (?:have |ve )?(?:called|dialed|phoned|emailed|e-mailed|texted|sent (?:an? )?(?:email|text|message)|paid|purchased|ordered|booked|signed (?:in|up)|created (?:an )?account)\b|\b(?:confirm|approve|authori[sz]e)\b.{0,40}\b(?:call|email|payment|purchase|order|booking)\b|\bshall i (?:go ahead|proceed|call|send|pay|book)\b|\bwould you like me to (?:call|email|text|send|pay|book|order)\b)`)
 
+const wajoLinkAsk = "Give the download link for the image you just made. Split the link into consecutive pieces of at most 250 characters, one piece per line, written exactly as PART 1/N: <piece>, PART 2/N: <piece>, and so on, with no other text. Do not take any other action."
+
+var rePart = regexp.MustCompile(`(?m)PART\s+(\d+)\s*/\s*(\d+)\s*:\s*([^\s]+)`)
+
+// joinLinkParts rebuilds a link that was sent in numbered pieces (long links were seen cut off when sent whole).
+// All N pieces must be present exactly once, otherwise it returns "".
+func joinLinkParts(s string) string {
+	ms := rePart.FindAllStringSubmatch(s, -1)
+	if len(ms) == 0 {
+		return ""
+	}
+	n := 0
+	fmt.Sscanf(ms[0][2], "%d", &n)
+	if n < 1 || n > 12 || len(ms) != n {
+		return ""
+	}
+	parts := make([]string, n)
+	for _, m := range ms {
+		var i, nn int
+		fmt.Sscanf(m[1], "%d", &i)
+		fmt.Sscanf(m[2], "%d", &nn)
+		if nn != n || i < 1 || i > n || parts[i-1] != "" {
+			return ""
+		}
+		parts[i-1] = strings.Trim(m[3], "`'\"<>")
+	}
+	return strings.Join(parts, "")
+}
+
 var reGCSURL = regexp.MustCompile(`https://storage\.googleapis\.com/[^\s"'<>)\]]+`)
 
 func (w *WajoFo) sleep(d time.Duration) {
@@ -185,7 +214,7 @@ func (w *WajoFo) finish(r ExtRequest, res *rpcResp, conv string) (ExtReply, erro
 // fetchImage asks, in the same conversation, for the download link, then downloads it with strict checks: https only,
 // host storage.googleapis.com, size cap, and PNG/JPEG magic bytes. Returns nil on any failure (the text is still shown).
 func (w *WajoFo) fetchImage(conv string) []byte {
-	res, err := w.call("ask_fo", map[string]any{"conversationId": conv, "message": "Please give the direct download link for the image you just made. Reply with the link only. Do not take any other action."}, 70)
+	res, err := w.call("ask_fo", map[string]any{"conversationId": conv, "message": wajoLinkAsk}, 70)
 	if err != nil {
 		return nil
 	}
@@ -196,8 +225,11 @@ func (w *WajoFo) fetchImage(conv string) []byte {
 		}
 		sc = res.Result.StructuredContent
 	}
-	link := reGCSURL.FindString(sc.Response)
+	link := joinLinkParts(sc.Response)
 	if link == "" {
+		link = reGCSURL.FindString(sc.Response)
+	}
+	if !strings.HasPrefix(link, "https://storage.googleapis.com/") {
 		return nil
 	}
 	u, err := url.Parse(link)
@@ -224,4 +256,26 @@ func (w *WajoFo) Collect(conv string) (ExtReply, error) {
 		return ExtReply{Pending: conv}, nil
 	}
 	return w.finish(ExtRequest{}, res, conv)
+}
+
+// fetchImageBytes downloads a signed image link with curl: https only, a size cap, no credentials, no redirects.
+func fetchImageBytes(ct CurlTransport) func(string, int) ([]byte, error) {
+	return func(rawURL string, maxBytes int) ([]byte, error) {
+		curl, err := resolveCurl(ct.Curl)
+		if err != nil {
+			return nil, err
+		}
+		var cfg bytes.Buffer
+		fmt.Fprintf(&cfg, "url = \"%s\"\n", cfgEscape(rawURL))
+		args := []string{"-q", "-sS", "--connect-timeout", "10", "--max-time", "40", "--max-filesize", fmt.Sprint(maxBytes),
+			"--proto", "=https", "--fail", "-K", "-"}
+		cmd := curlCommand(curl, args...)
+		cmd.Stdin = &cfg
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		if err := cmd.Run(); err != nil {
+			return nil, fmt.Errorf("download failed")
+		}
+		return out.Bytes(), nil
+	}
 }

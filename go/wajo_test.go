@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,9 +30,7 @@ func (m *mockPoster) PostJSON(u string, h map[string]string, body []byte, to int
 func sse(resp, status, conv string) string {
 	return "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"response\":" + jsonStr(resp) + ",\"status\":\"" + status + "\",\"conversationId\":\"" + conv + "\"}}}\n\n"
 }
-func jsonStr(s string) string {
-	return "\"" + strings.ReplaceAll(strings.ReplaceAll(s, "\\", "\\\\"), "\"", "\\\"") + "\""
-}
+func jsonStr(s string) string { b, _ := json.Marshal(s); return string(b) }
 
 func newWajo(t *testing.T, m *mockPoster) *WajoFo {
 	kf := filepath.Join(t.TempDir(), "k")
@@ -184,5 +184,58 @@ func TestExtErrorWordingNoFalseDenial(t *testing.T) {
 	r, _, _ := g.route("42", "explain the risks of this plan please")
 	if strings.Contains(r, "Nothing else was done") || !strings.Contains(r, "can't tell whether") {
 		t.Fatalf("%q", r)
+	}
+}
+
+func TestJoinLinkParts(t *testing.T) {
+	full := "https://storage.googleapis.com/b/o.png?X-Goog-Signature=" + strings.Repeat("ab", 300)
+	var sb strings.Builder
+	n := 0
+	for i := 0; i < len(full); i += 250 {
+		n++
+	}
+	k := 0
+	for i := 0; i < len(full); i += 250 {
+		j := i + 250
+		if j > len(full) {
+			j = len(full)
+		}
+		k++
+		sb.WriteString("PART " + fmt.Sprint(k) + "/" + fmt.Sprint(n) + ": " + full[i:j] + "\n")
+	}
+	if got := joinLinkParts(sb.String()); got != full {
+		t.Fatalf("rebuild failed: %d vs %d", len(got), len(full))
+	}
+	if joinLinkParts("PART 1/3: aaa\nPART 3/3: ccc") != "" || joinLinkParts("PART 1/2: a\nPART 1/2: b") != "" {
+		t.Fatal("incomplete or duplicate parts accepted")
+	}
+}
+
+func TestWajoImageUsesPartsAndOneFollowUp(t *testing.T) {
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 40)...)
+	parts := "PART 1/2: https://storage.googleapis.com/b/d.png?X-Goog-Signature=\nPART 2/2: abcdef"
+	m := &mockPoster{replies: []string{sse("Made it.", "complete", "c1"), sse(parts, "complete", "c1")}}
+	w := newWajo(t, m)
+	w.Images = true
+	gets := 0
+	var asked string
+	w.Get = func(u string, max int) ([]byte, error) { gets++; asked = u; return png, nil }
+	g := &extGate{A: w, Owner: "42", PerDay: 5}
+	r, img, ok := g.route("42", "generate image of a dog")
+	if !ok || len(img) == 0 || !strings.HasSuffix(asked, "Signature=abcdef") || gets != 1 || len(m.calls) != 2 {
+		t.Fatalf("ok=%v img=%d asked=%q gets=%d calls=%d reply=%q", ok, len(img), asked, gets, len(m.calls), r)
+	}
+	if len(g.TakeImage("42")) == 0 || len(g.TakeImage("42")) != 0 {
+		t.Fatal("image should be handed over exactly once")
+	}
+	// download failure: text only, no regeneration, no extra asks
+	m2 := &mockPoster{replies: []string{sse("Made it.", "complete", "c1"), sse(parts, "complete", "c1")}}
+	w2 := newWajo(t, m2)
+	w2.Images = true
+	w2.Get = func(u string, max int) ([]byte, error) { return nil, fmt.Errorf("x") }
+	g2 := &extGate{A: w2, Owner: "42", PerDay: 5}
+	_, img2, _ := g2.route("42", "generate image of a dog")
+	if len(img2) != 0 || len(m2.calls) != 2 {
+		t.Fatalf("img=%d calls=%d", len(img2), len(m2.calls))
 	}
 }
