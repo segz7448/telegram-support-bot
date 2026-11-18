@@ -34,7 +34,7 @@ func TestFeedsOwnerGateAndReading(t *testing.T) {
 			t.Fatalf("accepted %s: %q", bad, r)
 		}
 	}
-	if r, _ := f.Handle("42", "add feed https://example.org/rss.xml as news"); !strings.Contains(r, "Approved feed") {
+	if r, _ := f.Handle("42", "add feed https://example.org/rss.xml as news terms ok"); !strings.Contains(r, "Approved feed") {
 		t.Fatalf("add: %q", r)
 	}
 	r, ok := f.Handle("7", "feed news") // any chat may read an approved feed
@@ -75,7 +75,7 @@ func TestFeedsRedirectsPrivateAndTypes(t *testing.T) {
 	}
 	f, _, now := feedsFor(t, pages)
 	for n, u := range map[string]string{"redir": "https://example.org/redir.xml", "html": "https://example.org/html.xml", "same": "https://example.org/same.xml", "priv": "https://internal.example.org/x", "atom": "https://example.org/atom.xml"} {
-		f.Handle("42", "add feed "+u+" as "+n)
+		f.Handle("42", "add feed "+u+" as "+n+" terms ok")
 	}
 	read := func(n string) string { *now = now.Add(time.Minute); r, _ := f.Handle("7", "feed "+n); return r }
 	if r := read("redir"); !strings.Contains(r, "different site") || strings.Contains(r, "Story one") {
@@ -101,7 +101,7 @@ func TestFeedsRedirectsPrivateAndTypes(t *testing.T) {
 
 func TestCustomFeedAsDailyDigestSource(t *testing.T) {
 	f, _, now := feedsFor(t, map[string]PageResult{"https://example.org/rss.xml": {Status: 200, Body: []byte(rssSample), ContentType: "application/rss+xml"}})
-	f.Handle("42", "add feed https://example.org/rss.xml as news")
+	f.Handle("42", "add feed https://example.org/rss.xml as news terms ok")
 	n := &News{G: &fakeFeed{body: bbcXML, code: 200}, F: f, Path: filepath.Join(t.TempDir(), "news.json"), Owner: "42"}
 	n.Now = func() time.Time { return *now }
 	if r, _ := n.Handle("7", "daily news at 8am from feed news"); !strings.Contains(r, "Only the bot owner") {
@@ -118,5 +118,28 @@ func TestCustomFeedAsDailyDigestSource(t *testing.T) {
 	out := n.Tick(*now)
 	if len(out) != 1 || !strings.Contains(out[0].Text, "Story one") || strings.Contains(out[0].Text, "BBC") || strings.Contains(out[0].Text, "evil.test") {
 		t.Fatalf("digest from feed: %v", out)
+	}
+}
+
+func TestFeedNeedsTermsAckAndRestrictedHostsRefused(t *testing.T) {
+	f, _, _ := feedsFor(t, map[string]PageResult{})
+	if r, _ := f.Handle("42", "add feed https://example.org/rss.xml as plain"); !strings.Contains(r, "terms ok") || strings.Contains(r, "Approved") {
+		t.Fatalf("no ack asked: %q", r)
+	}
+	if ff, _ := f.load(); len(ff.Feeds) != 0 {
+		t.Fatal("saved without ack")
+	}
+	sourceOff["news"] = true
+	t.Cleanup(func() { sourceOff = map[string]bool{} })
+	if r, _ := f.Handle("42", "add feed https://feeds.bbci.co.uk/news/rss.xml as bbc terms ok"); !strings.Contains(r, "non-commercial") {
+		t.Fatalf("restricted host accepted: %q", r)
+	}
+	// a feed saved without the acknowledgement (older file) is not served
+	saveJSON(f.Path, &feedFile{Feeds: []feedDef{{Name: "old", URL: "https://example.org/rss.xml"}}})
+	if r, _ := f.Handle("7", "feed old"); !strings.Contains(r, "hasn't confirmed") {
+		t.Fatalf("unacked feed served: %q", r)
+	}
+	if _, err := f.Items("old"); err == nil {
+		t.Fatal("digest served unacked feed")
 	}
 }

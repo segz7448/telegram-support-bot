@@ -39,7 +39,7 @@ func TestSourceGatesNeverContactDisabledHosts(t *testing.T) {
 		t.Fatalf("github: %q %q", r, gh.url)
 	}
 	fd, pf, _ := feedsFor(t, map[string]PageResult{"https://example.org/rss.xml": {Status: 200, Body: []byte(rssSample), ContentType: "application/rss+xml"}})
-	fd.Handle("42", "add feed https://example.org/rss.xml as news")
+	fd.Handle("42", "add feed https://example.org/rss.xml as news terms ok")
 	before := len(pf.calls)
 	if _, err := fd.Items("news"); err == nil || !strings.Contains(err.Error(), "not available") || len(pf.calls) != before {
 		t.Fatalf("feeds: %v calls %d->%d", err, before, len(pf.calls))
