@@ -1,0 +1,22 @@
+[
+  {
+    "file": "VOSK-APACHE2.txt",
+    "bytes": 10173,
+    "sha256": "bb618af833c817ab01c1564bd3ec75ba4b4f9cf30910a4a2168e30a674ee8cc6"
+  },
+  {
+    "file": "vosk-model-small-en-us-0.15.zip",
+    "bytes": 41205931,
+    "sha256": "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498"
+  },
+  {
+    "file": "espeak-fdroid22-source.tar.gz",
+    "bytes": 17619083,
+    "sha256": "3dc26581244b8327256ba38cd2fedb1a060dff8832ada8dc6562c8c4b9b56838"
+  },
+  {
+    "file": "android-arm64-speech-helpers.tar.gz",
+    "bytes": 12908049,
+    "sha256": "698df30365d1ffc824ea12f05bb1323f8cfa00048d0ebab812b480d396f83f5c"
+  }
+]
