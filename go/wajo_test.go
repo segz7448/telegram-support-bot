@@ -356,21 +356,30 @@ func TestWajoImagePendingResumesAtSavedStage(t *testing.T) {
 	}
 }
 
-func TestLinkCandidatesRestore(t *testing.T) {
+func TestLinkWithoutSignedHeadersRefused(t *testing.T) {
 	l := imgLink()
 	noSH := strings.Replace(l, "&X-Goog-SignedHeaders=host", "", 1)
-	if noSH == l {
-		t.Skip("fixture has no SignedHeaders to remove")
-	}
-	got, why := linkFromLines(linkLines(noSH))
-	if got != noSH {
-		t.Fatalf("link without SignedHeaders should be accepted for restoration: %s", why)
-	}
-	c := linkCandidates(got)
-	if len(c) != 2 || !strings.HasSuffix(c[0], "&X-Goog-SignedHeaders=host&response-content-type=image%2Fpng") || !strings.HasSuffix(c[1], "&X-Goog-SignedHeaders=host") || !strings.HasPrefix(c[0], noSH) {
-		t.Fatalf("bad candidates %v", c)
+	if g, why := linkFromLines(linkLines(noSH)); g != "" || why != "missing_X-Goog-SignedHeaders" {
+		t.Fatalf("a link missing a required parameter must be refused, not repaired: %q %s", g, why)
 	}
 	if c := linkCandidates(l); len(c) != 1 || c[0] != l {
-		t.Fatal("a complete link must be tried as is")
+		t.Fatal("the link must be tried exactly as written")
+	}
+}
+
+func TestLinkParsedByQueryNotByPosition(t *testing.T) {
+	l := imgLink()
+	// real links carry parameters after the signature too
+	moved := strings.Replace(l, "&X-Goog-SignedHeaders=host", "", 1) + "&X-Goog-SignedHeaders=host&response-content-type=image%2Fpng"
+	got, why := linkFromLines(linkLines(moved))
+	if got != moved {
+		t.Fatalf("params after the signature must be accepted: %s", why)
+	}
+	if c := linkCandidates(got); len(c) != 1 || c[0] != moved {
+		t.Fatal("a link with SignedHeaders must be tried as is")
+	}
+	short := strings.Replace(moved, strings.Repeat("a1", 256), strings.Repeat("a1", 100), 1)
+	if g, _ := linkFromLines(linkLines(short)); g != "" {
+		t.Fatal("a short signature was accepted")
 	}
 }

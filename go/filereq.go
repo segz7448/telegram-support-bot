@@ -108,7 +108,11 @@ func buildFileReply(kind, opt, text string) (string, *OutFile) {
 	ext := opt
 	switch opt {
 	case "pdf":
-		data, err = makePDF("", t)
+		var note string
+		data, ext, note, err = makePDFOrDocx(t)
+		if err == nil && note != "" {
+			return note + fmt.Sprintf("Here is the %s file. %s", strings.ToUpper(ext), fileCaveat), &OutFile{Name: base + "." + ext, Data: data}
+		}
 	case "docx":
 		data, err = makeDocx("", t)
 	default:

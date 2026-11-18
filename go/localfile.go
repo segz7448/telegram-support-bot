@@ -210,9 +210,12 @@ func (d *fileDesk) convert(chat, base, ext, text, caption string) string {
 	}
 	var data []byte
 	var err error
+	pre := ""
 	switch ext {
 	case "pdf":
-		data, err = makePDF("", text)
+		var note string
+		data, ext, note, err = makePDFOrDocx(text)
+		pre = note
 	case "docx":
 		data, err = makeDocx("", text)
 	default:
@@ -228,7 +231,7 @@ func (d *fileDesk) convert(chat, base, ext, text, caption string) string {
 	d.mu.Lock()
 	d.out[chat] = &OutFile{Name: name, Data: data, Caption: caption}
 	d.mu.Unlock()
-	return "Here is " + name + "."
+	return pre + "Here is " + name + "."
 }
 
 // ---- PDF text reading (best effort, local) ----

@@ -36,7 +36,19 @@ func SelfTestFiles(outDir string) bool {
 		check("pdf-latin-unicode", false, msg)
 	}
 	msg, f = buildFileReply("doc", "pdf", "# Title\n\nHello 你好 world 😀")
-	check("pdf-nonlatin-rejected", f == nil && strings.Contains(msg, "DOCX"), "message: "+msg)
+	if f != nil {
+		_, derr := docxText(f.Data)
+		check("pdf-nonlatin-docx-fallback", strings.HasSuffix(f.Name, ".docx") && derr == nil && strings.Contains(msg, "Word file (DOCX) instead of a PDF"), save(f))
+	} else {
+		check("pdf-nonlatin-docx-fallback", false, msg)
+	}
+	msg, f = buildFileReply("doc", "pdf", "# Steps\n\nA → B → C, speed ≥ 10, done ✓")
+	if f != nil {
+		t, _ := pdfText(f.Data)
+		check("pdf-symbols-replaced-and-told", strings.HasSuffix(f.Name, ".pdf") && strings.Contains(t, "A -> B -> C") && strings.Contains(msg, "I replaced"), msg)
+	} else {
+		check("pdf-symbols-replaced-and-told", false, msg)
+	}
 	msg, f = buildFileReply("doc", "docx", "# Unicode test\n\nHello 你好 мир 😀 → ✓ café €5\n\nSecond paragraph.")
 	if f != nil {
 		t, err := docxText(f.Data)

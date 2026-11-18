@@ -55,8 +55,13 @@ func SelfTestExt(ct CurlTransport, step string) bool {
 		fmt.Printf("INFO still working at %s (saved stage %s), asking for the result again (%d)\n", time.Since(start).Round(time.Second), st, i+1)
 		txt, img, ok = g.route("selftest", "check answer")
 	}
-	if g.loadPending() != nil {
-		fmt.Println("INFO request still pending after bounded polling; saved record kept at", pf)
+	if p := g.loadPending(); p != nil {
+		if strings.Contains(txt, "Still working") {
+			fmt.Printf("INFO request still pending after bounded polling (stage %s); the saved record is kept at %s (owner id, conversation id, stage and times only; no key, no text). To clean up: rm %s, or rerun this mode to pick it up.\n", p.Stage, pf, pf)
+		} else {
+			g.clearPending()
+			fmt.Println("INFO the request finished, so the leftover saved record was removed")
+		}
 	}
 	if !ok {
 		fmt.Println("FAIL not handled by the gate")

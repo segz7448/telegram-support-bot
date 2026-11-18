@@ -386,7 +386,7 @@ func sigHexLen(s string) int {
 	return 0
 }
 
-var reSig = regexp.MustCompile(`X-Goog-Signature=([0-9a-fA-F]+)$`)
+var reSig = regexp.MustCompile(`X-Goog-Signature=([0-9a-fA-F]+)(?:&|$)`)
 
 var reQueryKey = regexp.MustCompile(`[?&](X-Goog-[A-Za-z]+)=`)
 
@@ -423,32 +423,19 @@ func linkFromLines(s string) (string, string) {
 		return "", "bad_host_or_parse"
 	}
 	q := u.Query()
-	for _, k := range []string{"X-Goog-Algorithm", "X-Goog-Credential", "X-Goog-Date", "X-Goog-Expires", "X-Goog-Signature"} {
+	for _, k := range []string{"X-Goog-Algorithm", "X-Goog-Credential", "X-Goog-Date", "X-Goog-Expires", "X-Goog-SignedHeaders", "X-Goog-Signature"} {
 		if q.Get(k) == "" {
 			return "", "missing_" + k
 		}
 	}
-	if n := sigHexLen(link); n != 512 || !strings.HasSuffix(link, q.Get("X-Goog-Signature")) {
+	if n := sigHexLen(link); n != 512 || len(q.Get("X-Goog-Signature")) != 512 {
 		return "", fmt.Sprintf("sig_not_512_at_end(%d)", sigHexLen(link))
 	}
 	return link, ""
 }
 
-// linkCandidates lists the links to try, in order. The service has been seen to end its link right after the
-// signature, leaving out the two parameters that real links from the same service carry after it
-// (X-Goog-SignedHeaders=host and response-content-type=image/png). When SignedHeaders is missing, the first candidate puts
-// both back and the second puts back only SignedHeaders. Each is one plain GET of a short-lived read link; the
-// picture is never regenerated. A link that already has SignedHeaders is tried as it is.
-func linkCandidates(link string) []string {
-	if strings.Contains(link, "X-Goog-SignedHeaders=") {
-		return []string{link}
-	}
-	c := []string{link + "&X-Goog-SignedHeaders=host"}
-	if !strings.Contains(link, "response-content-type=") {
-		c = []string{link + "&X-Goog-SignedHeaders=host&response-content-type=image%2Fpng", c[0]}
-	}
-	return c
-}
+// linkCandidates: the link is fetched exactly as the service wrote it, once. No parameters are added, removed or guessed.
+func linkCandidates(link string) []string { return []string{link} }
 
 var reTokenOnlyFull = regexp.MustCompile(`^[A-Za-z0-9%_\-.~:/?#@!$&*+,;=]+$`)
 

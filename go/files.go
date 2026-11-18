@@ -458,3 +458,44 @@ func (e *pdfCharsError) Error() string {
 	}
 	return fmt.Sprintf("this PDF writer can't hold characters like %s (it covers English and Western European text). Ask for a DOCX or a text file instead, which keep every character", strings.Join(l, " "))
 }
+
+// pdfTranslit replaces a few common symbols with plain ASCII so a PDF can still be made. It returns what it changed so the
+// user can be told. Everything else that a PDF can't hold is left for the caller to handle (DOCX fallback).
+var pdfTranslitMap = []struct{ from, to string }{
+	{"\u2192", "->"}, {"\u2190", "<-"}, {"\u2194", "<->"}, {"\u21d2", "=>"}, {"\u2713", "[x]"}, {"\u2714", "[x]"}, {"\u2717", "[ ]"}, {"\u2718", "[ ]"},
+	{"\u2248", "~"}, {"\u2264", "<="}, {"\u2265", ">="}, {"\u2260", "!="}, {"\u2212", "-"}, {"\u2010", "-"}, {"\u2011", "-"}, {"\u2012", "-"},
+	{"\u2032", "'"}, {"\u2033", "\""}, {"\u2605", "*"}, {"\u25cf", "*"}, {"\u25e6", "-"}, {"\u2023", ">"}, {"\u2192", "->"}, {"\u00a0", " "},
+	{"\u2009", " "}, {"\u202f", " "}, {"\u2002", " "}, {"\u2003", " "}, {"\u221e", "infinity"}, {"\u03c0", "pi"}, {"\u2211", "sum"},
+}
+
+func pdfTranslit(s string) (string, []string) {
+	var notes []string
+	for _, p := range pdfTranslitMap {
+		if p.from != "\u00a0" && strings.Contains(s, p.from) {
+			notes = append(notes, p.from+" as "+p.to)
+		}
+		s = strings.ReplaceAll(s, p.from, p.to)
+	}
+	return s, notes
+}
+
+// makePDFOrDocx makes a PDF. A few symbols are replaced with plain ASCII (and reported). If other characters remain that a
+// PDF can't hold, it makes a DOCX of the unchanged text instead and says so. ext is the format that was really made.
+func makePDFOrDocx(text string) (data []byte, ext, note string, err error) {
+	t, notes := pdfTranslit(text)
+	data, err = makePDF("", t)
+	if err == nil {
+		if len(notes) > 0 {
+			note = "A PDF can't show some symbols, so I replaced: " + strings.Join(notes, ", ") + ". "
+		}
+		return data, "pdf", note, nil
+	}
+	if _, isChars := err.(*pdfCharsError); !isChars {
+		return nil, "", "", err
+	}
+	data, derr := makeDocx("", text)
+	if derr != nil {
+		return nil, "", "", derr
+	}
+	return data, "docx", "Your text has characters a PDF can't hold (" + strings.TrimPrefix(strings.SplitN(err.Error(), " (", 2)[0], "this PDF writer can't hold characters like ") + "), so I made a Word file (DOCX) instead of a PDF. The text is unchanged. ", nil
+}
