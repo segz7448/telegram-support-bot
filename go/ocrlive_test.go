@@ -6,13 +6,12 @@ import (
 	"testing"
 )
 
-// Runs only when a tesseract program and a sample picture are present (TG_OCR_SAMPLE).
-func TestOCRLiveSample(t *testing.T) {
-	p := os.Getenv("TG_OCR_SAMPLE")
-	if p == "" || ocrPath() == "" {
-		t.Skip("no sample or no tesseract")
+// Runs only where a tesseract program exists. The fixture is a synthetic picture with known text (not a user picture).
+func TestOCRFixtureKnownText(t *testing.T) {
+	if ocrPath() == "" {
+		t.Skip("no tesseract on this machine")
 	}
-	b, err := os.ReadFile(p)
+	b, err := os.ReadFile("testdata/ocr-fixture.png")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,8 +19,12 @@ func TestOCRLiveSample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("OCR chars=%d lines=%d", len(out), strings.Count(out, "\n"))
+	for _, want := range []string{"Invoice 4821", "Northwind Traders", "150 dollars", "March 3", "front desk"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("recognised text is missing %q", want)
+		}
+	}
 	if !strings.HasPrefix(out, "Read from the picture") {
-		t.Fatal("label missing")
+		t.Error("label missing")
 	}
 }

@@ -304,7 +304,8 @@ func (g *extGate) startJobFor(chat string, run func(prog func(conv, stage, part1
 		j.r, j.err = run(prog)
 		// A request still running at the service is polled (read-only, never re-asked) in the background.
 		if c, ok := g.A.(Collector); ok && g.Deliver != nil {
-			for i := 0; i < 8 && j.err == nil && j.r.Pending != "" && !j.dropped; i++ {
+			began := time.Now()
+			for i := 0; i < 8 && j.err == nil && j.r.Pending != "" && !j.dropped && time.Since(began) < extBackgroundMax; i++ {
 				pp := extPending{Owner: g.Owner, Conv: j.r.Pending, Stage: j.r.Stage, Part1: j.r.Part1}
 				g.mu.Lock()
 				pp.Kind, pp.Opt = g.curKind, g.curOpt
@@ -357,6 +358,12 @@ func (g *extGate) ResumeSaved() {
 const extStillWorking = "Still working. It is running in the background and I'm still answering your other messages. Say \"check answer\" to collect it, or \"drop it\" to forget it. I won't re-send the request."
 
 const extStillWorkingAuto = "Still working. It is running in the background and I'm still answering your other messages. I'll send the result here when it is ready, and I won't re-send the request. You can also say \"drop it\" to forget it."
+
+// extBackgroundMax bounds how long one background worker keeps polling a request. After that the request stays saved
+// for "check answer" and the user is told.
+const extBackgroundMax = 15 * time.Minute
+
+const extNotReady = "The request is still not ready at the service after about 15 minutes. It is saved and I won't re-send it or keep polling. Say \"check answer\" later to look again, or \"drop it\" to forget it."
 
 func (g *extGate) stillWorking() string {
 	if g.Deliver != nil {
@@ -413,6 +420,9 @@ func (g *extGate) finish(chat string, j *extJob) (string, []byte) {
 	}
 	if r.Pending != "" {
 		g.savePending(r.Pending, r.Stage, r.Part1)
+		if j.detached && g.Deliver != nil {
+			return extNotReady, nil
+		}
 		return g.stillWorking(), nil
 	}
 	p := g.loadPending()
