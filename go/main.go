@@ -81,6 +81,7 @@ func main() {
 		return
 	}
 	if len(os.Args) > 2 && os.Args[1] == "--summary-check" {
+		loadSourceGates()
 		ct := CurlTransport{Curl: curlPath}
 		c := NewChat(nil, nil, ct, NewResolver(ct), func(s string) { fmt.Fprintln(os.Stderr, s) })
 		fmt.Println(c.Reply("check", "summarize "+os.Args[2]))

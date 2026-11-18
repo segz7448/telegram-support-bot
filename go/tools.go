@@ -89,7 +89,7 @@ func NewTools(f Fetcher, log func(string)) *Tools {
 }
 
 const helpGeneral = "I'm ZAO BOT, a chat bot running on a phone. I search the web, read a few pages and quote the most relevant sentences with their links, and I can also calculate, convert, play games, edit photos and keep notes and reminders. I can be wrong or miss the point, so check the links. Say \"more\" after an answer for more from the same pages.\n" +
-	"Page summaries: summarize https://example.com/page, or what is example.com about (then say more detail). I quote sentences from the page and say if I can't read it.\n" +
+	"Page summaries: summarize https://example.com/page, or what is example.com about (then say more detail). I show key excerpts from the page (not a full summary) and say if I can't read it.\n" +
 	"Maths and stats: 12*(3+4), 15% of 80, percent change from 50 to 75, mean of 3, 5, 8, standard deviation of 2 4 4 5.\n" +
 	"Dates and time: days until 2026-12-25, what day is 2027-03-01, 30 days from today, time in Tokyo, convert 3 pm New York to Lagos. Dates use UTC unless the owner set a time zone; I say which one I used.\n" +
 	"Calculator script (numbers only, no files or network): calc script: let s = 0; for i = 1 to 10 { s = s + i }; print s\n" +

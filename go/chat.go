@@ -823,6 +823,9 @@ func (c *Chat) Reply(chat, text string) string {
 		}
 		results = kept
 	}
+	if results = dropRestricted(results); len(results) == 0 {
+		return "I couldn't find web results for that that I'm allowed to quote. Try rewording."
+	}
 	pages := subjectPages(query, rerankResults(query, results))
 	whoDid := reWhoDid.MatchString(strings.ToLower(strings.TrimSpace(query)))
 	if whoDid {

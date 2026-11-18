@@ -126,7 +126,7 @@ func pageStructure(body []byte, base *url.URL) (heads []string, links []linkRef)
 				label := Sanitize(text(n))
 				if href != "" && len(label) >= 3 && len(label) <= 40 && len(links) < 8 {
 					if u, err := base.Parse(href); err == nil && u.Scheme == "https" && u.RawQuery == "" && u.Fragment == "" &&
-						strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.") == host && u.Path != "" && u.Path != "/" && u.Path != base.Path {
+						strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.") == host && u.Path != "" && u.Path != "/" && u.Path != base.Path && safePath(u.Path) {
 						if _, e := SafeURL(u.String()); e == nil && !seenL[u.Path] && !strings.ContainsAny(label, "[]") {
 							seenL[u.Path] = true
 							links = append(links, linkRef{label, u.String()})
@@ -148,14 +148,20 @@ func (c *Chat) readPage(raw string) (*pageSum, string) {
 	if c.Pages == nil || c.Res == nil {
 		return nil, "I can't open pages on this connection."
 	}
+	if restrictedURL(raw) {
+		return nil, "That publisher's terms allow personal, non-commercial use only, so I don't read or quote its pages for other people."
+	}
 	final, body, err := FetchPage(c.Pages, c.Res, raw)
+	if err == nil && restrictedURL(final) {
+		return nil, "That page is on a publisher whose terms allow personal, non-commercial use only, so I don't read or quote it for other people."
+	}
 	if err != nil {
 		c.logf("page summary: fetch failed")
 		return nil, "I couldn't open that page: " + err.Error() + "."
 	}
 	pt := ExtractText(body, 30000)
 	if len(strings.TrimSpace(pt.Text)) < sumMinChars {
-		return nil, "I opened " + final + " but found almost no readable text on it (it may be built with JavaScript, need a login, or block bots), so I won't summarise it."
+		return nil, "I opened " + shownURL(final) + " but found almost no readable text on it (it may be built with JavaScript, need a login, or block bots), so I won't summarise it."
 	}
 	ps := &pageSum{URL: final, Title: pt.Title}
 	for _, s := range sentences(pt.Text) {
@@ -174,7 +180,7 @@ func (c *Chat) readPage(raw string) (*pageSum, string) {
 		}
 	}
 	if len(ps.Sents) == 0 {
-		return nil, "I opened " + final + " but found no readable sentences on it, so I won't summarise it."
+		return nil, "I opened " + shownURL(final) + " but found no readable sentences on it, so I won't summarise it."
 	}
 	if u, e := SafeURL(final); e == nil {
 		ps.Heads, ps.Links = pageStructure(body, u)
@@ -236,7 +242,8 @@ found:
 			}
 		}
 		v *= 1 + 0.4*float64(minInt(ov, 3))
-		switch { // the opening of a page usually says what it is
+		v /= 1 + float64(i)/60 // earlier text is more likely to describe the page itself
+		switch {               // the opening of a page usually says what it is
 		case i >= start && i < start+2:
 			v *= 2.2
 		case i >= start && i < start+6:
@@ -268,6 +275,80 @@ found:
 	return out
 }
 
+// restrictedURL: pages from publishers whose terms were checked and allow personal, non-commercial use only are not
+// read, summarised or quoted while the news source is off (public/business default). Same list as custom feeds.
+func restrictedURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && sourceOff["news"] && feedHostRestricted(u.Hostname())
+}
+
+func dropRestricted(rs []SearchResult) []SearchResult {
+	var out []SearchResult
+	for _, r := range rs {
+		if !restrictedURL(r.URL) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+var reSecretPath = regexp.MustCompile(`(?i)(token|key|secret|reset|invite|session|auth|login|signin|signup|verify|unsubscribe|share|access|magic|password|account|checkout|cart|order|invoice|download|private|admin|callback|oauth)`)
+
+// tokenLike reports a path segment that looks like a credential or a customer-specific link: long, or with letters
+// and digits mixed in a long run, or a word such as reset or invite.
+func tokenLike(seg string) bool {
+	if reSecretPath.MatchString(seg) {
+		return true
+	}
+	if strings.ContainsAny(seg, "-_:.") { // readable slugs and names are not credentials
+		return false
+	}
+	d, lo, up := 0, 0, 0
+	for _, r := range seg {
+		switch {
+		case r >= '0' && r <= '9':
+			d++
+		case r >= 'a' && r <= 'z':
+			lo++
+		case r >= 'A' && r <= 'Z':
+			up++
+		}
+	}
+	switch {
+	case len(seg) >= 12 && d >= 3 && lo+up >= 3: // mixed letters and digits
+		return true
+	case len(seg) >= 16 && lo > 0 && up > 0 && up >= 3: // random mixed case
+		return true
+	case len(seg) >= 24:
+		return true
+	}
+	return false
+}
+
+func safePath(p string) bool {
+	for _, s := range strings.Split(p, "/") {
+		if s != "" && tokenLike(s) {
+			return false
+		}
+	}
+	return true
+}
+
+// shownURL is the address printed back: no query or fragment, and no path when it looks like a private link.
+func shownURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	out := u.Scheme + "://" + u.Host
+	if safePath(u.Path) {
+		out += u.Path
+	} else {
+		out += "/ (rest of the address not shown)"
+	}
+	return out
+}
+
 func hostLabel(u string) string {
 	p, err := url.Parse(u)
 	if err != nil {
@@ -287,11 +368,11 @@ func (ps *pageSum) render(detail bool) string {
 	if title == "" {
 		title = hostLabel(ps.URL)
 	}
-	kind := "sentences quoted from the page"
+	kind := "key excerpts picked from the page"
 	if ps.ShortLines {
 		kind = "short lines from the page (it has little running text)"
 	}
-	fmt.Fprintf(&b, "%s (%s). These are %s, not my own words:\n", trunc(title, 100), hostLabel(ps.URL), kind)
+	fmt.Fprintf(&b, "%s (%s). Not a full summary: %s, quoted as written (links and citation marks removed). They can leave out context, so open the page for the full picture.\n", trunc(title, 100), hostLabel(ps.URL), kind)
 	used := 0
 	for _, s := range picked {
 		if used+len(s) > limit && used > 0 {
@@ -315,11 +396,36 @@ func (ps *pageSum) render(detail bool) string {
 	if ps.Redirected != "" {
 		b.WriteString("Note: " + ps.Redirected + " redirected to " + hostLabel(ps.URL) + ".\n")
 	}
-	b.WriteString("Source: " + ps.URL + " (untrusted page text, may be wrong or out of date).")
+	b.WriteString("Source: " + shownURL(ps.URL) + " (untrusted page text, may be wrong or out of date).")
 	if !detail {
-		b.WriteString("\nSay \"more detail\" for a longer summary, or send me another link.")
+		b.WriteString("\nSay \"more detail\" for more excerpts, or send me another link.")
 	}
-	return b.String()
+	return capReply(b.String(), ps, detail)
+}
+
+// capReply keeps the answer under Telegram's 4096-character limit by dropping the optional link and heading lines first.
+func capReply(s string, ps *pageSum, detail bool) string {
+	for len([]rune(s)) > 3800 {
+		var keep []string
+		cut := false
+		for _, l := range strings.Split(s, "\n") {
+			if !cut && (strings.HasPrefix(l, "Other pages on this site:") || strings.HasPrefix(l, "Headings on the page:")) {
+				cut = true
+				continue
+			}
+			keep = append(keep, l)
+		}
+		if !cut { // still too long: drop the last excerpt
+			for i := len(keep) - 1; i >= 0; i-- {
+				if strings.HasPrefix(keep[i], "- ") {
+					keep = append(keep[:i], keep[i+1:]...)
+					break
+				}
+			}
+		}
+		s = strings.Join(keep, "\n")
+	}
+	return s
 }
 
 func (c *Chat) sumAllowed(chat string) bool {
@@ -367,8 +473,28 @@ func (c *Chat) pageSummary(chat, text string, st *convo) (string, bool) {
 		if err != nil || len(rs) == 0 {
 			return "I couldn't find a website for \"" + byName + "\". Send me its address instead.", true
 		}
+		rs = dropRestricted(rs)
+		var hosts []string
+		seenH := map[string]bool{}
+		var opts []string
+		for _, r := range rs {
+			h := hostLabel(r.URL)
+			if h == "" || seenH[h] || len(opts) >= 3 {
+				continue
+			}
+			seenH[h] = true
+			hosts = append(hosts, h)
+			opts = append(opts, fmt.Sprintf("%s - %s", trunc(cleanTitle(r.Title), 60), shownURL(r.URL)))
+		}
+		if len(hosts) == 0 {
+			return "I couldn't find a website for \"" + byName + "\" I can read. Send me its address instead.", true
+		}
+		sq := strings.Join(toks(byName), "")
+		if !(len(hosts) == 1 || (sq != "" && strings.Contains(strings.ReplaceAll(hosts[0], "-", ""), sq) && (len(hosts) < 2 || !strings.Contains(strings.ReplaceAll(hosts[1], "-", ""), sq)))) {
+			return "\"" + byName + "\" could be more than one website, and I don't want to summarise the wrong one. Which do you mean?\n- " + strings.Join(opts, "\n- ") + "\nSend me the address of the right one, e.g. summarize " + shownURL(rs[0].URL), true
+		}
 		raw = rs[0].URL
-		prefix = "I searched for \"" + byName + "\" and read the top result, which may not be the official site.\n"
+		prefix = "I searched for \"" + byName + "\" and found one clear match; check it's the site you meant.\n"
 	}
 	ps, msg := c.readPage(raw)
 	if ps == nil {
@@ -380,7 +506,7 @@ func (c *Chat) pageSummary(chat, text string, st *convo) (string, bool) {
 	if len(pickRest) > 3 {
 		st.rest = pickRest[3:]
 	}
-	st.srcs = []string{"[1] " + ps.URL}
+	st.srcs = []string{"[1] " + shownURL(ps.URL)}
 	c.logf("page summary ok")
 	return prefix + ps.render(false), true
 }

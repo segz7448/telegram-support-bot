@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -52,7 +53,7 @@ func TestSumTarget(t *testing.T) {
 func TestSummaryQuotesPageNotInstructionsAndMoreDetail(t *testing.T) {
 	c, pf := sumChat(t, map[string]PageResult{"https://acme.example/": okPage(sumPage)})
 	r := c.Reply("1", "summarize https://acme.example/")
-	for _, want := range []string{"Acme Bakery", "family bakery in Lagos", "Source: https://acme.example/", "not my own words", "untrusted"} {
+	for _, want := range []string{"Acme Bakery", "family bakery in Lagos", "Source: https://acme.example/", "Not a full summary", "untrusted"} {
 		if !strings.Contains(r, want) {
 			t.Fatalf("missing %q in %q", want, r)
 		}
@@ -139,7 +140,7 @@ func TestSummaryRateLimitAndNameSearch(t *testing.T) {
 	c2, pf := sumChat(t, map[string]PageResult{"https://acme.example/": okPage(sumPage)})
 	c2.Search = fixedSearch{{Title: "Acme Bakery", URL: "https://acme.example/", Snippet: "x"}}
 	r := c2.Reply("7", "summarize the Acme Bakery website")
-	if !strings.Contains(r, "may not be the official site") || !strings.Contains(r, "family bakery") || len(pf.calls) != 1 {
+	if !strings.Contains(r, "one clear match") || !strings.Contains(r, "family bakery") || len(pf.calls) != 1 {
 		t.Fatalf("%q %v", r, pf.calls)
 	}
 	c3, _ := sumChat(t, nil)
@@ -156,4 +157,77 @@ func (f fixedSearch) Search(q string) ([]SearchResult, error) {
 		return nil, fmt.Errorf("none")
 	}
 	return f, nil
+}
+
+func TestSummaryBulletsAreLiteralPageText(t *testing.T) {
+	c, _ := sumChat(t, map[string]PageResult{"https://acme.example/": okPage(sumPage)})
+	plain := strings.Join(strings.Fields(regexp.MustCompile(`(?s)<script.*?</script>|<[^>]+>`).ReplaceAllString(sumPage, " ")), " ")
+	for _, q := range []string{"summarize https://acme.example/", "more detail"} {
+		n := 0
+		for _, l := range strings.Split(c.Reply("1", q), "\n") {
+			if strings.HasPrefix(l, "- ") {
+				n++
+				if !strings.Contains(plain, strings.TrimPrefix(l, "- ")) {
+					t.Fatalf("%q: bullet is not literal page text: %q", q, l)
+				}
+			}
+		}
+		if n == 0 {
+			t.Fatal("no bullets")
+		}
+	}
+}
+
+func TestSummaryAmbiguousNameAsksAndRestrictedPublishersRefused(t *testing.T) {
+	c, pf := sumChat(t, map[string]PageResult{"https://acme.example/": okPage(sumPage), "https://other.example/": okPage(sumPage)})
+	c.Search = fixedSearch{{Title: "Nova Inc", URL: "https://acme.example/"}, {Title: "Nova Foods", URL: "https://other.example/"}}
+	r := c.Reply("1", "summarize the Nova website")
+	if !strings.Contains(r, "more than one website") || !strings.Contains(r, "other.example") || len(pf.calls) != 0 {
+		t.Fatalf("%q %v", r, pf.calls)
+	}
+	sourceOff["news"] = true
+	t.Cleanup(func() { sourceOff = map[string]bool{} })
+	c2, pf2 := sumChat(t, map[string]PageResult{"https://www.bbc.com/news": okPage(sumPage), "https://acme.example/go": {Status: 302, RedirectURL: "https://www.bbc.co.uk/news"}, "https://www.bbc.co.uk/news": okPage(sumPage)})
+	if r := c2.Reply("1", "summarize https://www.bbc.com/news"); !strings.Contains(r, "non-commercial") || len(pf2.calls) != 0 {
+		t.Fatalf("bbc fetched: %q %v", r, pf2.calls)
+	}
+	c2.Search = fixedSearch{{Title: "BBC News", URL: "https://www.bbc.com/news"}}
+	if r := c2.Reply("1", "summarize the BBC News website"); strings.Contains(r, "Acme") || len(pf2.calls) != 0 {
+		t.Fatalf("bbc by name: %q %v", r, pf2.calls)
+	}
+}
+
+func TestSummaryDoesNotEchoPrivateLinks(t *testing.T) {
+	page := `<html><head><title>Portal</title></head><body><h1>Portal</h1><p>Welcome to the customer portal where you can read about our company and what we do each day for people.</p><p>We build tools for small shops, and we help owners keep track of stock, sales, and orders every week.</p>
+<a href="/reset/Ab3dE5gH7jK9mN2p">Reset link</a><a href="/invite/abc">Invite</a><a href="/s/9f8a7b6c5d4e3f2a1b0c">Shared file</a><a href="/products">Products</a><a href="/blog/how-we-help-small-shops-grow">Blog post</a></body></html>`
+	c, _ := sumChat(t, map[string]PageResult{"https://acme.example/p?token=SECRETVALUE": okPage(page), "https://acme.example/share/Zx81Qw92Lk3Mn": okPage(page)})
+	c.Reply("1", "summarize https://acme.example/p?token=SECRETVALUE#frag")
+	d := c.Reply("1", "more detail")
+	for _, bad := range []string{"reset", "invite", "9f8a7b6c", "token", "SECRETVALUE", "frag", "?"} {
+		if strings.Contains(d, bad) {
+			t.Fatalf("exposed %q: %q", bad, d)
+		}
+	}
+	if !strings.Contains(d, "Products: https://acme.example/products") || !strings.Contains(d, "how-we-help-small-shops-grow") {
+		t.Fatalf("normal links lost: %q", d)
+	}
+	r := c.Reply("2", "summarize https://acme.example/share/Zx81Qw92Lk3Mn")
+	if strings.Contains(r, "Zx81Qw92Lk3Mn") {
+		t.Fatalf("private path echoed: %q", r)
+	}
+}
+
+func TestSummaryOutputFitsTelegramLimit(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<html><head><title>Big</title></head><body>")
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&b, "<h2>Heading number %d about bakery operations and many other details</h2><p>Bakery operations section %d describes bread baking schedules, delivery routes, and ordering rules for customers in Lagos city.</p><a href=\"/section-%d-bakery-operations\">Section %d link</a>", i, i, i, i)
+	}
+	b.WriteString("</body></html>")
+	c, _ := sumChat(t, map[string]PageResult{"https://acme.example/big": okPage(b.String())})
+	for _, q := range []string{"summarize https://acme.example/big", "more detail"} {
+		if r := c.Reply("1", q); len([]rune(r)) > 4000 {
+			t.Fatalf("%q: %d chars", q, len([]rune(r)))
+		}
+	}
 }
