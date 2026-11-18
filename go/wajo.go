@@ -221,6 +221,9 @@ func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
 		} else {
 			msg = "Create the files for this project: " + r.Text + "\nOutput ONLY the files. Start each file with a line exactly like === FILE: relative/path.ext === followed by the file contents, and finish with a line exactly === END ===. Plain text files only, at most 20 files, no secrets, keys or credentials, nothing that has to be installed outside the files. Do not take any other action."
 		}
+		if r.Raw != "" {
+			msg = r.Raw
+		}
 		res, err := w.call("ask_fo", map[string]any{"message": msg, "newConversation": true}, 130)
 		if err != nil {
 			return ExtReply{}, err

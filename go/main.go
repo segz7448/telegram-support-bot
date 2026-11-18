@@ -216,6 +216,9 @@ func main() {
 		}
 		tools.General = true
 		chat.Desk = newFileDesk()
+		if chat.Ext != nil {
+			chat.Ext.Desk = chat.Desk
+		}
 		fmt.Fprintln(os.Stderr, "general chat mode (no language model): search + page extraction; search key present:", srch != nil)
 	}
 	rateN := 10
