@@ -27,7 +27,7 @@ type quizState struct {
 }
 
 var (
-	reQuizStart  = regexp.MustCompile(`(?i)^\s*(?:quiz me|start (?:a )?quiz|flashcards?|quiz)\s*[.!]?\s*$`)
+	reQuizStart  = regexp.MustCompile(`(?i)^\s*(?:quiz me|start (?:a )?quiz|give me a quiz|test me|quiz time|flashcards?|quiz)\s*[.!]?\s*$`)
 	reQuizNext   = regexp.MustCompile(`(?i)^\s*(?:next(?: question)?|another one)\s*[.!]?\s*$`)
 	reQuizStop   = regexp.MustCompile(`(?i)^\s*(?:stop quiz|end quiz|quiz stop|quit quiz)\s*[.!]?\s*$`)
 	reQuizAnswer = regexp.MustCompile(`(?is)^\s*(?:answer|ans|a)\s*:\s*(.+?)\s*$`)

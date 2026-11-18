@@ -784,6 +784,11 @@ func (c *Chat) Reply(chat, text string) string {
 	text = normWW(text)
 	st := c.state(chat)
 	low := strings.ToLower(text)
+	if reDayQ.MatchString(gmNorm(text)) {
+		if r, ok := Compute("what is today", c.Now()); ok {
+			return r
+		}
+	}
 	if _, r, ok := smallTalk(low); ok {
 		return r
 	}
@@ -804,6 +809,18 @@ func (c *Chat) Reply(chat, text string) string {
 	}
 	if reGenerate.MatchString(low) {
 		return "I can't write or generate new content (essays, poems, code, translations): I only search, quote, calculate and look things up. If you tell me what you want to know about the topic, I'll search for it."
+	}
+	if h, ok := classifyHint(text); ok {
+		if h == "\x00games" {
+			for _, g := range c.Games {
+				if gm, isMenu := g.(*GameMenu); isMenu {
+					return gm.menu(chat, "").Text
+				}
+			}
+		} else {
+			c.logf("intent hint (classifier), no search")
+			return h
+		}
 	}
 	query := text
 	if st.topic != "" && len(terms(text)) <= 4 && reFollow.MatchString(low) {
@@ -1490,3 +1507,5 @@ var reParen = regexp.MustCompile(`\([^)]*\)`)
 
 // groupPrivacyMsg: notes and reminders are stored per chat, and in a group every member shares the chat, so they stay in private chats.
 const groupPrivacyMsg = "Notes and reminders are personal, so I only keep them in a private chat with me. In a group everyone could read them. Message me directly."
+
+var reDayQ = regexp.MustCompile(`^(?:what day is it(?: today| now)?|what day is today|which day is it|what is the date(?: today)?|what s the date(?: today)?|whats the date(?: today)?|what is today s date|what s today s date|today s date)$`)

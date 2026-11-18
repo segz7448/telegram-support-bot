@@ -10,7 +10,7 @@ import (
 var dlRnd = rand.New(rand.NewSource(time.Now().UnixNano()))
 var reDlName = regexp.MustCompile(`^(?:what s my name|what is my name|do you know my name|who am i|do you know who i am|do you remember my name)$`)
 var reDlPass = regexp.MustCompile(`^(?:please )?(?:generate|make|give me|create|suggest)(?: me)?(?: a| an)?(?: strong| random| secure| good)? password$`)
-var reDlQuiz = regexp.MustCompile(`^(?:quiz me|give me a quiz|start a quiz|test me|trivia quiz|quiz|ask me (?:a )?question)$`)
+var reDlQuiz = regexp.MustCompile(`^(?:quiz me|give me a quiz|start a quiz|test me|trivia quiz|quiz|quiz time|ask me (?:a )?question)$`)
 var reDlRepeat = regexp.MustCompile(`^(?:what did i (?:just )?(?:say|write|ask|type)|what was my (?:last|previous) (?:message|question)|what did i say before|repeat what i said)$`)
 
 // Dialogue acts that need no web search: feelings, chit-chat, meta questions about the bot, requests the bot cannot do,
@@ -48,6 +48,9 @@ func (c *Chat) dialogue(chat, text string, st *convo) (string, bool) {
 	}
 	switch {
 	case reDlRepeat.MatchString(t):
+		if strings.HasPrefix(chat, "-") {
+			return "In a group I don't repeat earlier messages, since I can't tell members apart.", true
+		}
 		if st != nil && st.prev != "" {
 			return "You wrote: \"" + noLinks(st.prev) + "\"", true
 		}
@@ -59,7 +62,7 @@ func (c *Chat) dialogue(chat, text string, st *convo) (string, bool) {
 	case reDlPass.MatchString(t):
 		return "I don't generate passwords on this bot. Use your phone's or password manager's built-in generator.", true
 	case reDlQuiz.MatchString(t):
-		return "There is no quiz set up here: my quiz only draws on facts the owner has taught me, and none are available. I can play a board game or look a topic up.", true
+		return "Quizzes only run in the owner's chat, over facts the owner has taught me. I can play a board game or look a topic up instead.", true
 	case reNoTrivia.MatchString(t):
 		return "I don't have a trivia or fun-fact list, and I won't make facts up. Name a topic and I'll look it up and quote the source, or say \"let's play a game\".", true
 	case reDlFeel.MatchString(t):

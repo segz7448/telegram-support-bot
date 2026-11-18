@@ -213,3 +213,36 @@ func TestRunnerGameMenuEndToEnd(t *testing.T) {
 		t.Fatalf("games not started: %v", tr.sent)
 	}
 }
+
+func TestInstalledFeaturesNotShadowed(t *testing.T) {
+	e := newGmEnv(t)
+	d := t.TempDir()
+	e.c.Rem = &Reminders{Path: filepath.Join(d, "rem.json")}
+	e.c.Notes = &Notes{Path: filepath.Join(d, "notes.json")}
+	for _, in := range []string{"remind me in 20 minutes to check the oven", "remind me at 6pm to call Sam", "remind me every day at 9am to stretch", "remind me to call mum tomorrow at 5pm", "remind me to stretch in 20 minutes"} {
+		r, _ := e.send("8", in)
+		if strings.Contains(r, "I can set:") || strings.Contains(r, "can't") || len(e.s.qs) != 0 {
+			t.Errorf("reminder shadowed: %q -> %q", in, r)
+		}
+	}
+	if r, _ := e.send("8", "reminders"); strings.Contains(r, "Nothing") || strings.Contains(r, "no reminders") {
+		t.Errorf("reminders not saved: %q", r)
+	}
+	if r, _ := e.send("8", "note: gate code 12"); !strings.Contains(strings.ToLower(r), "saved") && !strings.Contains(strings.ToLower(r), "note") {
+		t.Errorf("note: %q", r)
+	}
+	// time/date features live in Compute and run before the chat; the dialogue layer must not catch them
+	for _, in := range []string{"time in Tokyo", "days until 2026-12-25"} {
+		if _, ok := Compute(in, time.Now()); !ok {
+			t.Errorf("compute lost %q", in)
+		}
+	}
+	if r, _ := e.send("8", "what day is it"); !strings.Contains(r, "Today is") {
+		t.Errorf("day question: %q", r)
+	}
+	// quiz: non-owner gets the owner-only message, never a web search or a public promise
+	r, _ := e.send("8", "give me a quiz")
+	if len(e.s.qs) != 0 || strings.Contains(r, "couldn't find") {
+		t.Errorf("quiz request searched: %q", r)
+	}
+}

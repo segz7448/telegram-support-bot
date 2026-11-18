@@ -168,6 +168,9 @@ func (m *GameMenu) Handle(chat, text string) (*ChessReply, bool) {
 		}
 		return m.menu(chat, "You have no game in progress."), true
 	}
+	if c, p, k := intentNB.classify(text); c == "games" && p >= clsMinP && k >= clsMinKnown && len(strings.Fields(t)) >= 2 && len(strings.Fields(t)) <= 12 {
+		return m.menu(chat, ""), true
+	}
 	if m.recent(chat) {
 		es := m.on()
 		if mm := reGmNum.FindStringSubmatch(t); mm != nil {

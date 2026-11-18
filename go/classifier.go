@@ -1,0 +1,124 @@
+package main
+
+import (
+	"math"
+	"strings"
+)
+
+// Intent classifier: a small multinomial naive Bayes model over words and word pairs. It is TRAINED, at start-up, on
+// example messages written by the bot's author (classifier_data.go); it learns which fixed intent a loose message is
+// closest to. It is fixed-intent selection, not reasoning, and it never runs a tool: deterministic handlers get the
+// first chance, and the classifier only decides between "this looks like a request for one of my features, say how to
+// ask for it" and "treat as a search question". Anything below the confidence bar goes to search as before.
+
+type intentModel struct {
+	classes []string
+	prior   map[string]float64
+	counts  map[string]map[string]float64
+	total   map[string]float64
+	vocab   map[string]bool
+}
+
+func featuresOf(text string) []string {
+	t := gmNorm(text)
+	w := strings.Fields(t)
+	var f []string
+	for i, x := range w {
+		f = append(f, x)
+		if i+1 < len(w) {
+			f = append(f, x+"_"+w[i+1])
+		}
+	}
+	return f
+}
+
+func trainIntents(data map[string][]string) *intentModel {
+	m := &intentModel{prior: map[string]float64{}, counts: map[string]map[string]float64{}, total: map[string]float64{}, vocab: map[string]bool{}}
+	n := 0.0
+	for c, ex := range data {
+		m.classes = append(m.classes, c)
+		m.counts[c] = map[string]float64{}
+		for _, e := range ex {
+			n++
+			m.prior[c]++
+			for _, f := range featuresOf(e) {
+				m.counts[c][f]++
+				m.total[c]++
+				m.vocab[f] = true
+			}
+		}
+	}
+	for c := range m.prior {
+		m.prior[c] /= n
+	}
+	return m
+}
+
+// classify returns the best intent and its posterior probability. known is the share of the message's features that the
+// model has seen at all: a message made of unseen words gets known near 0 and should not be trusted.
+func (m *intentModel) classify(text string) (best string, p float64, known float64) {
+	fs := featuresOf(text)
+	if len(fs) == 0 {
+		return "", 0, 0
+	}
+	seen := 0
+	for _, f := range fs {
+		if m.vocab[f] {
+			seen++
+		}
+	}
+	known = float64(seen) / float64(len(fs))
+	V := float64(len(m.vocab))
+	scores := map[string]float64{}
+	mx := math.Inf(-1)
+	for _, c := range m.classes {
+		s := math.Log(m.prior[c])
+		for _, f := range fs {
+			s += math.Log((m.counts[c][f] + 0.5) / (m.total[c] + 0.5*V))
+		}
+		scores[c] = s
+		if s > mx {
+			mx, best = s, c
+		}
+	}
+	sum := 0.0
+	for _, c := range m.classes {
+		sum += math.Exp(scores[c] - mx)
+	}
+	return best, 1 / sum, known
+}
+
+const (
+	clsMinP     = 0.90
+	clsMinKnown = 0.5
+)
+
+var intentNB = trainIntents(intentTraining)
+
+var intentHints = map[string]string{
+	"games":       "\x00games", // the game menu answers
+	"reminders":   "It sounds like you want a reminder. I can message you here at a set time. Say it like: remind me in 20 minutes to check the oven, or: remind me at 6pm to call Sam.",
+	"notes":       "It sounds like you want to save something. Say it like: note: the gate code is 1234, or: task: pay rent. Then say \"notes\" or \"tasks\" to see them.",
+	"weather":     "It sounds like a weather question. Tell me the place, like: weather in Lagos, or: forecast for London.",
+	"news":        "It sounds like you want the news. Say: news, or: news about football.",
+	"calc":        "It sounds like a calculation or conversion. Write the numbers plainly, like: 15% of 80, or: convert 5 miles to km, or: days until 2026-12-25.",
+	"design":      "It sounds like you want a picture. I can make a quote card, a poster, a banner or a bar, line or pie chart. Say it like: quote card: Stay curious, or: pie chart: A=1, B=3.",
+	"chitchat":    "Thanks. I'm a program with a fixed set of tools, so I can't chat much beyond that. " + capsLine,
+	"unsupported": "I can't do that one. " + capsLine,
+}
+
+// classifyHint is called only after every deterministic handler has passed on the message.
+func classifyHint(text string) (string, bool) {
+	if len(text) > 160 || len(strings.Fields(text)) < 2 {
+		return "", false
+	}
+	c, p, known := intentNB.classify(text)
+	if c == "" || c == "search" || p < clsMinP || known < clsMinKnown {
+		return "", false
+	}
+	h := intentHints[c]
+	if h == "" {
+		return "", false
+	}
+	return h, true
+}
