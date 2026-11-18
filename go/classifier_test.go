@@ -121,3 +121,114 @@ func TestClassifierThroughChat(t *testing.T) {
 		}
 	}
 }
+
+// Third set, written once after the clarify rule existed and not used for tuning.
+var clarifySet = []string{
+	"help me plan my trip", "can you do something about my schedule", "i want to organise my week", "help me plan my trip", "i would like something fun to do",
+	"can you handle this for me", "i need to sort out my tasks", "let me do something with my list", "i want you to take care of my meeting", "could you arrange something for tonight",
+}
+var imperativeFactual = []string{
+	"tell me about the roman empire", "explain how a bill becomes law", "describe the water cycle", "define the word ephemeral", "show me the history of jazz",
+	"give me the history of rome", "find out who built the pyramids", "can you tell me who painted guernica", "i want to know how rockets work", "i need to know the capital of peru",
+	"can you explain what a mortgage is", "help me understand inflation", "i would like to learn about volcanoes", "could you tell me when ww1 started", "i want to learn how to cook rice",
+	"show me how photosynthesis works", "check the facts on the moon landing", "find me information about whales", "give me facts about mars", "write down the steps of mitosis",
+}
+
+func TestClarifyOnUncertainAction(t *testing.T) {
+	got := 0
+	for _, x := range clarifySet {
+		if _, ok := clarifyFor(x); ok {
+			got++
+		} else {
+			t.Logf("no clarify: %q", x)
+		}
+	}
+	bad := 0
+	for _, x := range imperativeFactual {
+		if q, ok := clarifyFor(x); ok {
+			bad++
+			t.Errorf("factual request got a clarify question: %q -> %.60s", x, q)
+		}
+	}
+	t.Logf("ambiguous action requests clarified: %d/%d; imperative factual wrongly clarified: %d/%d", got, len(clarifySet), bad, len(imperativeFactual))
+}
+
+func TestClarifyFlowAndSearchFollowup(t *testing.T) {
+	e := newGmEnv(t)
+	r, _ := e.send("3", "help me plan my trip")
+	if len(e.s.qs) != 0 || !strings.Contains(r, "Did you mean") {
+		t.Skipf("phrase not clarified here: %q", r)
+	}
+	e.send("3", "search")
+	if len(e.s.qs) != 1 || !strings.Contains(e.s.qs[0], "plan my trip") {
+		t.Fatalf("search follow-up did not search the original: %v", e.s.qs)
+	}
+	e2 := newGmEnv(t)
+	e2.send("3", "help me plan my trip")
+	e2.send("3", "what is the capital of kenya")
+	e2.send("3", "search")
+	if len(e2.s.qs) != 1 {
+		t.Fatalf("stale pending was reused: %v", e2.s.qs)
+	}
+}
+
+// Fresh clean set (written after the rules were fixed; evaluated once, not used for tuning).
+var cleanClarify = []string{
+	"i want to sort out my to do items", "can you set something up for me tonight", "i need to get something done today", "could you prepare something for my friend",
+	"help me with my plans for friday", "i have to do something about my deadlines", "let me organise my errands", "please arrange something for later",
+}
+var cleanNotClarify = []string{
+	"can you recommend a good book about space", "i want a vegetarian lasagna recipe", "please translate good morning into spanish", "can you suggest names for a cafe",
+	"write me a short poem about rain", "show me pictures of pandas", "play the song bohemian rhapsody", "i need a good workout for beginners",
+	"can you compare python and java", "find me a cheap hotel in rome", "give me a list of african countries", "tell me a fun fact about owls",
+	"help me write a cover letter", "please summarise the plot of macbeth", "what should i cook tonight", "recommend a movie for tonight",
+}
+
+func TestCleanClarifyEval(t *testing.T) {
+	a, b := 0, 0
+	for _, x := range cleanClarify {
+		if _, ok := clarifyFor(x); ok {
+			a++
+		} else {
+			t.Logf("clean: not clarified: %q", x)
+		}
+	}
+	for _, x := range cleanNotClarify {
+		if _, ok := clarifyFor(x); ok {
+			b++
+			t.Logf("clean: WRONGLY clarified: %q", x)
+		}
+	}
+	t.Logf("CLEAN SET: ambiguous clarified %d/%d; other requests wrongly clarified %d/%d", a, len(cleanClarify), b, len(cleanNotClarify))
+}
+
+// Final clean set: written after the rules were frozen, evaluated once, never used to tune.
+var finalClarify = []string{
+	"can you organise my errands for the week", "i need you to sort my tasks", "could you help me with this", "i want to do something about my plans",
+	"i need something done for my event", "can you make something for the party", "help me with my meeting prep", "i would like to forget less about my appointments",
+	"let me plan my deadlines", "can you deal with this for me",
+}
+var finalNot = []string{
+	"i need a good book to read", "can you suggest a gift for my mother", "help me choose a laptop", "i want to buy running shoes", "please draw a conclusion from this paragraph",
+	"i need advice on studying", "can you find me a pizza place nearby", "let me know the score of the game", "i want to learn guitar", "could you recommend a podcast",
+	"give me ideas for dinner", "i need a taxi to the airport", "can you play a song by adele", "show me how to tie a tie", "can you check the stock price of apple",
+	"i want a refund policy template", "help me pick a name for my dog", "could you list the planets", "i want a story about dragons", "can you call my brother",
+}
+
+func TestFinalCleanEval(t *testing.T) {
+	a, b := 0, 0
+	for _, x := range finalClarify {
+		if _, ok := clarifyFor(x); ok {
+			a++
+		} else {
+			t.Logf("final: not clarified: %q", x)
+		}
+	}
+	for _, x := range finalNot {
+		if _, ok := clarifyFor(x); ok {
+			b++
+			t.Logf("final: WRONGLY clarified: %q", x)
+		}
+	}
+	t.Logf("FINAL CLEAN SET: ambiguous clarified %d/%d; other requests wrongly clarified %d/%d", a, len(finalClarify), b, len(finalNot))
+}

@@ -58,9 +58,23 @@ func trainIntents(data map[string][]string) *intentModel {
 // classify returns the best intent and its posterior probability. known is the share of the message's features that the
 // model has seen at all: a message made of unseen words gets known near 0 and should not be trusted.
 func (m *intentModel) classify(text string) (best string, p float64, known float64) {
+	d, known := m.dist(text)
+	for c, v := range d {
+		if v > p {
+			best, p = c, v
+		}
+	}
+	return best, p, known
+}
+
+// dist returns the posterior probability of every intent.
+func (m *intentModel) dist(text string) (map[string]float64, float64) {
+	var known float64
+	var best string
 	fs := featuresOf(text)
+	out := map[string]float64{}
 	if len(fs) == 0 {
-		return "", 0, 0
+		return out, 0
 	}
 	seen := 0
 	for _, f := range fs {
@@ -82,11 +96,15 @@ func (m *intentModel) classify(text string) (best string, p float64, known float
 			mx, best = s, c
 		}
 	}
+	_ = best
 	sum := 0.0
 	for _, c := range m.classes {
 		sum += math.Exp(scores[c] - mx)
 	}
-	return best, 1 / sum, known
+	for _, c := range m.classes {
+		out[c] = math.Exp(scores[c]-mx) / sum
+	}
+	return out, known
 }
 
 const (
@@ -136,3 +154,56 @@ func clsGuard(text string) bool {
 	t := gmNorm(text)
 	return !reClsWh.MatchString(t) || reClsWhOK.MatchString(t)
 }
+
+// ---- clarify instead of guessing ----
+
+var reClsAction = regexp.MustCompile(`^(?:please |pls |hey |ok |okay |yo )*(?:i (?:want|need|would like|d like|wanna|have to|gotta|should)|we (?:need|want|should)|can you|could you|would you|will you|can u|help me|let me|let us|lets|make|create|give me|get me|set|start|do|show me|find me|put|add|write|send|call|book|order|buy|play|turn|open|post|share|schedule|plan|organi[sz]e|prepare|arrange|handle|fix|check|help)\b`)
+var reClsFactualVerb = regexp.MustCompile(`^(?:please |pls |hey |ok |okay )*(?:tell me about|explain|describe|define|search|look up|find out|show me (?:the )?(?:history|facts|info|pictures of|photos of)|give me (?:the )?(?:history|facts|info|a summary|details)|check (?:the )?(?:facts|price|prices)|find (?:me )?(?:info|information|facts|a recipe|recipes))\b`)
+
+var clsNames = map[string]string{"games": "play a game", "reminders": "set a reminder", "notes": "save a note or task", "weather": "get the weather", "news": "get the news", "calc": "do a calculation", "design": "make a picture or chart", "chitchat": "just chat", "unsupported": "something I can't do"}
+
+// Feature word lists used to ground a clarify question: a question is only asked when the message contains words that
+// belong to a real feature. (The statistical model's probabilities were not reliable enough on messages far from its
+// examples, so this step is a plain word-list rule, not the model.)
+var clsLex = []struct {
+	key string
+	re  *regexp.Regexp
+}{
+	{"reminders", regexp.MustCompile(`\b(?:forget|forgetting|remind|reminder|reminders|deadline|deadlines|appointment|appointments|meeting|meetings|alarm)\b`)},
+	{"notes", regexp.MustCompile(`\b(?:note|notes|tasks?|todo|todos|errands?|plan|plans|organi[sz]e|schedule|agenda|week|checklist)\b`)},
+	{"games", regexp.MustCompile(`\b(?:games?|bored|fun|something to play)\b`)},
+	{"design", regexp.MustCompile(`\b(?:poster|flyer|logo|banner|picture|image|graphic|chart|invitation|artwork|event)\b`)},
+	{"weather", regexp.MustCompile(`\b(?:weather|rain|umbrella|sunny|forecast|temperature)\b`)},
+	{"calc", regexp.MustCompile(`\b(?:calculate|total|split|convert|percent|tip)\b`)},
+}
+var reClsNo = regexp.MustCompile(`\b(?:song|songs|music|call|phone|email|taxi|hotel|flight|ticket|tickets|pizza|food|list of|poem|story|letter|translate|recommend|suggest|compare|workout|recipe)\b`)
+
+// clarifyFor decides whether a request-shaped message that no handler recognised should get a question instead of a web
+// search: action-shaped wording, no information-seeking words, and at least one word from a real feature's word list.
+func clarifyFor(text string) (string, bool) {
+	t := gmNorm(text)
+	n := len(strings.Fields(t))
+	if n < 3 || n > 14 || len(text) > 160 || reClsInfo.MatchString(t) || reClsNo.MatchString(t) || !clsGuard(text) || !reClsAction.MatchString(t) || reClsFactualVerb.MatchString(t) {
+		return "", false
+	}
+	var hits []string
+	for _, l := range clsLex {
+		if l.re.MatchString(t) {
+			hits = append(hits, clsNames[l.key])
+		}
+	}
+	if len(hits) == 0 {
+		if n <= 10 && reClsVague.MatchString(t) {
+			return "I'm not sure what you'd like me to do. I can set reminders, save notes and tasks, play games, make pictures and charts, do calculations, and give weather and news. Tell me which, in a few more words. Or say \"search\" and I'll look your message up on the web.", true
+		}
+		return "", false
+	}
+	if len(hits) > 2 {
+		hits = hits[:2]
+	}
+	return "I'm not sure what you'd like me to do. Did you mean to " + strings.Join(hits, ", or ") + "? Tell me which, in a few more words. Or say \"search\" and I'll look your message up on the web.", true
+}
+
+var reClsInfo = regexp.MustCompile(`\b(?:who|whom|whose|when|where|why|how|what|which|know|learn|understand|steps?|facts?|meaning|means|difference|capital|history|cost|price|true|explain|describe|define)\b`)
+
+var reClsVague = regexp.MustCompile(`^(?:please |pls )*(?:can you|could you|would you|i need|i want|i would like|i d like|help me|let me|we need)\b.*\b(?:something|anything|stuff|things?|this|it)\b`)

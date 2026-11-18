@@ -235,13 +235,14 @@ func (w WikiSearch) search(q string) ([]SearchResult, error) {
 // ---- chat ----
 
 type convo struct {
-	topic string   // last source title / query, used to resolve follow-ups
-	rest  []string // ranked sentences not yet shown (for "more")
-	srcs  []string
-	seen  int
-	page  *pageSum // last summarised page, for "more detail"
-	last  string   // this chat's latest message, and the one before it (for "what did I just say")
-	prev  string
+	topic   string   // last source title / query, used to resolve follow-ups
+	rest    []string // ranked sentences not yet shown (for "more")
+	srcs    []string
+	seen    int
+	page    *pageSum // last summarised page, for "more detail"
+	last    string   // this chat's latest message, and the one before it (for "what did I just say")
+	prev    string
+	pending string // a message we asked about; "search" then looks it up
 }
 
 type Chat struct {
@@ -721,9 +722,22 @@ func (c *Chat) Reply(chat, text string) string {
 			}
 		}
 	}
+	forceSearch := false
+	if reSearchIt.MatchString(gmNorm(text)) && c.state(chat).pending == "" {
+		return "What should I search for? Send me the question and I'll look it up."
+	}
 	{
 		sc := c.state(chat)
 		sc.prev, sc.last = sc.last, text
+		if sc.pending != "" {
+			p := sc.pending
+			sc.pending = ""
+			if reSearchIt.MatchString(gmNorm(text)) {
+				text = p
+				sc.last = p
+				forceSearch = true
+			}
+		}
 	}
 	text = nlRewrite(text)
 	if r, ok := TextTool(text); ok {
@@ -810,7 +824,7 @@ func (c *Chat) Reply(chat, text string) string {
 	if reGenerate.MatchString(low) {
 		return "I can't write or generate new content (essays, poems, code, translations): I only search, quote, calculate and look things up. If you tell me what you want to know about the topic, I'll search for it."
 	}
-	if h, ok := classifyHint(text); ok {
+	if h, ok := classifyHint(text); ok && !forceSearch {
 		if h == "\x00games" {
 			for _, g := range c.Games {
 				if gm, isMenu := g.(*GameMenu); isMenu {
@@ -821,6 +835,11 @@ func (c *Chat) Reply(chat, text string) string {
 			c.logf("intent hint (classifier), no search")
 			return h
 		}
+	}
+	if q, ok := clarifyFor(text); ok && !forceSearch {
+		st.pending = text
+		c.logf("clarify (classifier), no search")
+		return q
 	}
 	query := text
 	if st.topic != "" && len(terms(text)) <= 4 && reFollow.MatchString(low) {
@@ -1509,3 +1528,5 @@ var reParen = regexp.MustCompile(`\([^)]*\)`)
 const groupPrivacyMsg = "Notes and reminders are personal, so I only keep them in a private chat with me. In a group everyone could read them. Message me directly."
 
 var reDayQ = regexp.MustCompile(`^(?:what day is it(?: today| now)?|what day is today|which day is it|what is the date(?: today)?|what s the date(?: today)?|whats the date(?: today)?|what is today s date|what s today s date|today s date)$`)
+
+var reSearchIt = regexp.MustCompile(`^(?:search|search it|search for it|search the web|search that|look it up|look that up|web search|google it|web|ok search|yes search|just search|search please)$`)
