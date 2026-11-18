@@ -31,6 +31,7 @@ type WajoFo struct {
 	Media        bool // opt-in MCP media route; legacy pending records still collect via their saved stage
 	MediaURL     string
 	MediaAgentID string // non-secret account agent identifier supplied by local config, never baked into public code
+	InputVoice   bool   // separate opt-in for short owner-private voice transcription
 	InputVision  bool   // private uploaded-image analysis requires its own opt-in
 	InputEdits   bool   // remote input editing requires its own opt-in; disabled after fidelity failure
 	Get          func(rawURL string, maxBytes int) ([]byte, error)
@@ -220,7 +221,10 @@ func respText(res *rpcResp) string {
 }
 
 func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
-	if w.Media && (r.Image || len(r.InputImage) > 0) {
+	if len(r.InputVoice) > 0 && (!w.Media || !w.InputVoice) {
+		return ExtReply{}, fmt.Errorf("private voice route disabled")
+	}
+	if w.Media && (r.Image || len(r.InputImage) > 0 || len(r.InputVoice) > 0) {
 		w.kindCur = ""
 		return w.askMedia(r)
 	}
@@ -471,7 +475,7 @@ func linkShape(link, why string) string {
 
 // Collect resumes a saved request by polling its conversation (nothing is re-asked at the stage it saved).
 func (w *WajoFo) Collect(p extPending) (ExtReply, error) {
-	if p.Stage == stMediaImage || p.Stage == stMediaVision || p.Stage == stMediaEdit {
+	if p.Stage == stMediaVoice || p.Stage == stMediaImage || p.Stage == stMediaVision || p.Stage == stMediaEdit {
 		w.kindCur = ""
 		return w.collectMedia(p.Conv, p.Stage, nil, w.deadline())
 	}

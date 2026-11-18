@@ -652,6 +652,9 @@ func (r *Runner) Run() error {
 			uid := int(uidf)
 			if cq, okq := u["callback_query"].(map[string]any); okq {
 				r.handleTap(cq)
+			} else if vcid, vfid, vsize, vdur, isVoice := voiceMessage(u); isVoice {
+				msg := r.handleVoice(vcid, vfid, vsize, vdur)
+				call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(vcid)}, "text": {msg}}, 30)
 			} else if pcid, fid, psize, pcap, isPhoto := photoMessage(u); isPhoto && r.Chat != nil && mediaGroup(u) != "" {
 				// album member: gather it; the album is handled once it has been quiet (see flush)
 				a := albums[pcid]

@@ -53,6 +53,12 @@ func main() {
 	}
 	curlPath := os.Getenv("TG_CURL")
 	tools := NewTools(CurlTransport{Curl: curlPath}, func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
+	if len(os.Args) > 1 && os.Args[1] == "--selftest-voice-handler" {
+		if !SelfTestVoiceHandler(CurlTransport{Curl: curlPath}) {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--selftest-media-handler" {
 		if !SelfTestMediaHandler(CurlTransport{Curl: curlPath}) {
 			os.Exit(1)
@@ -223,9 +229,10 @@ func main() {
 			if os.Getenv("TG_EXT_IMAGES") == "1" {
 				wf.Images, wf.Get = true, fetchImageBytes(CurlTransport{Curl: curl})
 			}
+			wf.InputVoice = os.Getenv("TG_EXT_VOICE") == "1"
 			wf.InputVision = os.Getenv("TG_EXT_VISION") == "1"
 			wf.InputEdits = wf.Images && os.Getenv("TG_EXT_IMAGE_EDITS") == "1"
-			wf.Media = wf.Images || wf.InputVision || wf.InputEdits
+			wf.Media = wf.Images || wf.InputVision || wf.InputEdits || wf.InputVoice
 			chat.Ext = &extGate{A: wf, Owner: strings.TrimSpace(os.Getenv("TG_OWNER_ID")), PerDay: per, Now: time.Now, PendingFile: os.Getenv("TG_EXT_PENDING_FILE")}
 			fmt.Fprintln(os.Stderr, "outside assistant: on (owner-only)")
 		}
