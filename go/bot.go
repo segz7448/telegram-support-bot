@@ -739,7 +739,7 @@ func (r *Runner) Run() error {
 							if img := r.Chat.Ext.TakeImage(fmt.Sprint(cid)); len(img) > 0 {
 								ok := false
 								if ps, okp := r.T.(PhotoSender); okp {
-									raw, perr := ps.PostPhoto(r.API, r.Token, fmt.Sprint(cid), "Picture from the outside assistant (unchecked)", img, filepath.Dir(r.StatePath), 60)
+									raw, perr := ps.PostPhoto(r.API, r.Token, fmt.Sprint(cid), "Generated picture (unchecked)", img, filepath.Dir(r.StatePath), 60)
 									var body map[string]any
 									if perr == nil && json.Unmarshal(raw, &body) == nil {
 										ok, _ = body["ok"].(bool)

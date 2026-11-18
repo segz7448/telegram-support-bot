@@ -120,35 +120,6 @@ func (w *WajoFo) CanImages() bool { return w.Images && w.Get != nil }
 
 var reWajoActionOut = regexp.MustCompile(`(?i)(?:ACTION_REFUSED|\bi (?:have |ve )?(?:called|dialed|phoned|emailed|e-mailed|texted|sent (?:an? )?(?:email|text|message)|paid|purchased|ordered|booked|signed (?:in|up)|created (?:an )?account)\b|\b(?:confirm|approve|authori[sz]e)\b.{0,40}\b(?:call|email|payment|purchase|order|booking)\b|\bshall i (?:go ahead|proceed|call|send|pay|book)\b|\bwould you like me to (?:call|email|text|send|pay|book|order)\b)`)
 
-const wajoLinkAsk = "Give the download link for the image you just made. Split the link into consecutive pieces of at most 250 characters, one piece per line, written exactly as PART 1/N: <piece>, PART 2/N: <piece>, and so on, with no other text. Do not take any other action."
-
-var rePart = regexp.MustCompile(`(?m)PART\s+(\d+)\s*/\s*(\d+)\s*:\s*([^\s]+)`)
-
-// joinLinkParts rebuilds a link that was sent in numbered pieces (long links were seen cut off when sent whole).
-// All N pieces must be present exactly once, otherwise it returns "".
-func joinLinkParts(s string) string {
-	ms := rePart.FindAllStringSubmatch(s, -1)
-	if len(ms) == 0 {
-		return ""
-	}
-	n := 0
-	fmt.Sscanf(ms[0][2], "%d", &n)
-	if n < 1 || n > 12 || len(ms) != n {
-		return ""
-	}
-	parts := make([]string, n)
-	for _, m := range ms {
-		var i, nn int
-		fmt.Sscanf(m[1], "%d", &i)
-		fmt.Sscanf(m[2], "%d", &nn)
-		if nn != n || i < 1 || i > n || parts[i-1] != "" {
-			return ""
-		}
-		parts[i-1] = strings.Trim(m[3], "`'\"<>")
-	}
-	return strings.Join(parts, "")
-}
-
 var reGCSURL = regexp.MustCompile(`https://storage\.googleapis\.com/[^\s"'<>)\]]+`)
 
 func (w *WajoFo) sleep(d time.Duration) {
@@ -159,103 +130,235 @@ func (w *WajoFo) sleep(d time.Duration) {
 	}
 }
 
-func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
+// Stages of one request. A request that is still running is saved at its stage and resumed by polling the same
+// conversation: an ask that was already sent is never sent again.
+const (
+	stText  = "text"  // waiting for the answer to a text question
+	stGen   = "gen"   // waiting for the picture to be made (the picture is made once)
+	stWait1 = "wait1" // waiting for the first part of a fresh signed link
+	stWait2 = "wait2" // waiting for the rest of that link
+)
+
+const firstPartChars = 600
+
+var reImgSubject = regexp.MustCompile(`(?i)^\s*(?:please |can you |could you )?(?:generate|create|draw|make|produce|paint|design|render)(?: me)?(?: an?| the| some)? (?:image|picture|photo|illustration|drawing|painting|artwork|portrait)(?: of| showing| with)?\s*`)
+
+// imageSubject turns the owner's request into a short, plain subject for the fixed picture prompt.
+func imageSubject(t string) string {
+	s := reImgSubject.ReplaceAllString(t, "")
+	var b strings.Builder
+	for _, r := range s {
+		if r == ' ' || r == ',' || r == '.' || r == '-' || r == '\'' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			b.WriteRune(r)
+		}
+	}
+	out := strings.Join(strings.Fields(b.String()), " ")
+	if len(out) > 120 {
+		out = strings.TrimSpace(out[:120])
+	}
+	return out
+}
+
+func (w *WajoFo) deadline() time.Time {
 	total := w.TotalSec
 	if total <= 0 {
 		total = 100
 	}
-	deadline := time.Now().Add(time.Duration(total) * time.Second)
+	return time.Now().Add(time.Duration(total) * time.Second)
+}
+
+// settle polls the conversation while the service reports "working", until the deadline.
+func (w *WajoFo) settle(res *rpcResp, conv string, dl time.Time) (*rpcResp, bool, error) {
+	for res.Result.StructuredContent.Status == "working" {
+		if time.Now().After(dl) {
+			return res, false, nil
+		}
+		var err error
+		if res, err = w.call("get_fo_reply", map[string]any{"conversationId": conv, "waitSeconds": 25}, 70); err != nil {
+			return nil, false, err
+		}
+	}
+	if res.Result.StructuredContent.Status == "failed" {
+		return nil, false, fmt.Errorf("failed")
+	}
+	return res, true, nil
+}
+
+func respText(res *rpcResp) string {
+	if t := res.Result.StructuredContent.Response; t != "" {
+		return t
+	}
+	if len(res.Result.Content) > 0 {
+		return res.Result.Content[0].Text
+	}
+	return ""
+}
+
+func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
+	dl := w.deadline()
+	if r.Image {
+		sub := imageSubject(r.Text)
+		if sub == "" {
+			return ExtReply{Text: "Tell me what the picture should show."}, nil
+		}
+		res, err := w.call("ask_fo", map[string]any{"message": "Generate an image of: " + sub + "\nOnly make the image and reply with a short caption. Do not take any other action.", "newConversation": true}, 70)
+		if err != nil {
+			return ExtReply{}, err
+		}
+		conv := res.Result.StructuredContent.ConversationID
+		if conv == "" {
+			return ExtReply{}, fmt.Errorf("no conversation")
+		}
+		w.LastConv = conv
+		res, done, err := w.settle(res, conv, dl)
+		if err != nil {
+			return ExtReply{}, err
+		}
+		if !done {
+			return ExtReply{Pending: conv, Stage: stGen}, nil
+		}
+		return w.resume(conv, stGen, "", res, dl)
+	}
 	res, err := w.call("ask_fo", map[string]any{"message": fmt.Sprintf(wajoPreamble, r.Text), "newConversation": true}, 70)
 	if err != nil {
 		return ExtReply{}, err
 	}
-	sc := res.Result.StructuredContent
-	conv := sc.ConversationID
+	conv := res.Result.StructuredContent.ConversationID
 	w.LastConv = conv
-	for sc.Status == "working" {
-		if time.Now().After(deadline) {
-			return ExtReply{Pending: conv}, nil
-		}
-		args := map[string]any{"waitSeconds": 25}
-		if conv != "" {
-			args["conversationId"] = conv
-		}
-		res, err = w.call("get_fo_reply", args, 70)
-		if err != nil {
-			return ExtReply{}, err
-		}
-		sc = res.Result.StructuredContent
-		if sc.ConversationID != "" {
-			conv = sc.ConversationID
-		}
+	if conv == "" && res.Result.StructuredContent.Status == "working" {
+		return ExtReply{}, fmt.Errorf("no conversation")
 	}
-	return w.finish(r, res, conv)
-}
-
-func (w *WajoFo) finish(r ExtRequest, res *rpcResp, conv string) (ExtReply, error) {
-	sc := res.Result.StructuredContent
-	if sc.Status == "failed" {
-		return ExtReply{}, fmt.Errorf("failed")
-	}
-	txt := sc.Response
-	if txt == "" && len(res.Result.Content) > 0 {
-		txt = res.Result.Content[0].Text
-	}
-	if reWajoActionOut.MatchString(txt) {
-		return ExtReply{Text: extActionNote}, nil
-	}
-	out := ExtReply{Text: txt}
-	if r.Image && w.CanImages() && conv != "" {
-		out.Image = w.fetchImage(conv)
-	}
-	return out, nil
-}
-
-// fetchImage asks, in the same conversation, for the download link, then downloads it with strict checks: https only,
-// host storage.googleapis.com, size cap, and PNG/JPEG magic bytes. Returns nil on any failure (the text is still shown).
-func (w *WajoFo) fetchImage(conv string) []byte {
-	res, err := w.call("ask_fo", map[string]any{"conversationId": conv, "message": wajoLinkAsk}, 70)
-	if err != nil {
-		return nil
-	}
-	sc := res.Result.StructuredContent
-	for i := 0; sc.Status == "working" && i < 4; i++ {
-		if res, err = w.call("get_fo_reply", map[string]any{"conversationId": conv, "waitSeconds": 25}, 70); err != nil {
-			return nil
-		}
-		sc = res.Result.StructuredContent
-	}
-	link := joinLinkParts(sc.Response)
-	if link == "" {
-		link = reGCSURL.FindString(sc.Response)
-	}
-	if !strings.HasPrefix(link, "https://storage.googleapis.com/") {
-		return nil
-	}
-	u, err := url.Parse(link)
-	if err != nil || u.Scheme != "https" || u.Host != "storage.googleapis.com" {
-		return nil
-	}
-	b, err := w.Get(link, 8<<20)
-	if err != nil || len(b) < 16 || len(b) > 8<<20 {
-		return nil
-	}
-	if !(bytes.HasPrefix(b, []byte("\x89PNG")) || bytes.HasPrefix(b, []byte{0xFF, 0xD8, 0xFF})) {
-		return nil
-	}
-	return b
-}
-
-// Collect fetches the result of a request that was still running (one poll, no new request is created).
-func (w *WajoFo) Collect(conv string) (ExtReply, error) {
-	res, err := w.call("get_fo_reply", map[string]any{"conversationId": conv, "waitSeconds": 25}, 70)
+	res, done, err := w.settle(res, conv, dl)
 	if err != nil {
 		return ExtReply{}, err
 	}
-	if res.Result.StructuredContent.Status == "working" {
-		return ExtReply{Pending: conv}, nil
+	if !done {
+		return ExtReply{Pending: conv, Stage: stText}, nil
 	}
-	return w.finish(ExtRequest{}, res, conv)
+	return w.resume(conv, stText, "", res, dl)
+}
+
+const wajoFirstAsk = "Make a fresh signed download link for the image you already made. Do not make a new image. Reply with ONLY the first %d characters of that link, with no other text."
+const wajoRestAsk = "Using that same fresh link, reply with ONLY the characters that come after its first %d characters, with no other text. Do not make a new image."
+
+var reTokenOnly = regexp.MustCompile(`[A-Za-z0-9%_\-.~:/?#@!$&*+,;=]+`)
+
+func (w *WajoFo) txtOut(res *rpcResp) (string, bool) {
+	t := respText(res)
+	return t, !reWajoActionOut.MatchString(t)
+}
+
+// resume continues a request from its stage. cur is the latest settled result for that stage, or nil to poll first.
+// Each service ask is sent at most once per request: text 1, picture 1 plus 2 link asks (the link asks do not make a new picture).
+func (w *WajoFo) resume(conv, stage, part1 string, cur *rpcResp, dl time.Time) (ExtReply, error) {
+	if cur == nil {
+		res, err := w.call("get_fo_reply", map[string]any{"conversationId": conv, "waitSeconds": 25}, 70)
+		if err != nil {
+			return ExtReply{}, err
+		}
+		var done bool
+		if cur, done, err = w.settle(res, conv, dl); err != nil {
+			return ExtReply{}, err
+		} else if !done {
+			return ExtReply{Pending: conv, Stage: stage, Part1: part1}, nil
+		}
+	}
+	switch stage {
+	case stText:
+		t, ok := w.txtOut(cur)
+		if !ok {
+			return ExtReply{Text: extActionNote}, nil
+		}
+		return ExtReply{Text: t}, nil
+	case stGen:
+		if _, ok := w.txtOut(cur); !ok {
+			return ExtReply{Text: extActionNote}, nil
+		}
+		if !w.CanImages() {
+			return ExtReply{Text: "The picture was made but I can't fetch it here."}, nil
+		}
+		res, err := w.call("ask_fo", map[string]any{"conversationId": conv, "message": fmt.Sprintf(wajoFirstAsk, firstPartChars)}, 70)
+		if err != nil {
+			return ExtReply{}, err
+		}
+		res, done, err := w.settle(res, conv, dl)
+		if err != nil {
+			return ExtReply{}, err
+		}
+		if !done {
+			return ExtReply{Pending: conv, Stage: stWait1}, nil
+		}
+		return w.resume(conv, stWait1, "", res, dl)
+	case stWait1:
+		t, ok := w.txtOut(cur)
+		if !ok {
+			return ExtReply{Text: extActionNote}, nil
+		}
+		p1 := reGCSURL.FindString(strings.NewReplacer("`", " ").Replace(t))
+		if !strings.HasPrefix(p1, "https://storage.googleapis.com/") || len(p1) < 100 {
+			return ExtReply{Text: imgFail}, nil
+		}
+		res, err := w.call("ask_fo", map[string]any{"conversationId": conv, "message": fmt.Sprintf(wajoRestAsk, len(p1))}, 70)
+		if err != nil {
+			return ExtReply{}, err
+		}
+		res, done, err := w.settle(res, conv, dl)
+		if err != nil {
+			return ExtReply{}, err
+		}
+		if !done {
+			return ExtReply{Pending: conv, Stage: stWait2, Part1: p1}, nil
+		}
+		return w.resume(conv, stWait2, p1, res, dl)
+	case stWait2:
+		t, ok := w.txtOut(cur)
+		if !ok {
+			return ExtReply{Text: extActionNote}, nil
+		}
+		p2 := reTokenOnly.FindString(strings.NewReplacer("`", " ").Replace(t))
+		link := joinLink(part1, p2)
+		if link == "" {
+			return ExtReply{Text: imgFail}, nil
+		}
+		b, err := w.Get(link, 8<<20)
+		if err != nil || len(b) < 16 || len(b) > 8<<20 || !(bytes.HasPrefix(b, []byte("\x89PNG")) || bytes.HasPrefix(b, []byte{0xFF, 0xD8, 0xFF})) {
+			return ExtReply{Text: imgFail}, nil
+		}
+		return ExtReply{Text: "Here is the picture.", Image: b}, nil
+	}
+	return ExtReply{}, fmt.Errorf("unknown stage")
+}
+
+const imgFail = "The picture was made, but I couldn't fetch it. I won't make another one by myself."
+
+var reSig = regexp.MustCompile(`X-Goog-Signature=([0-9a-fA-F]+)$`)
+
+// joinLink joins the two parts (dropping any overlap) and accepts the result only if it is a storage.googleapis.com
+// https link whose X-Goog-Signature is the full 512 hex characters.
+func joinLink(p1, p2 string) string {
+	if p1 == "" || p2 == "" {
+		return ""
+	}
+	// no overlap first (the verified case); overlap is tried only if that does not give a valid link
+	for k := 0; k <= min(len(p1), len(p2), 64); k++ {
+		if k > 0 && !strings.HasSuffix(p1, p2[:k]) {
+			continue
+		}
+		link := p1 + p2[k:]
+		u, err := url.Parse(link)
+		if err != nil || u.Scheme != "https" || u.Host != "storage.googleapis.com" {
+			continue
+		}
+		if m := reSig.FindStringSubmatch(link); m != nil && len(m[1]) == 512 {
+			return link
+		}
+	}
+	return ""
+}
+
+// Collect resumes a saved request by polling its conversation (nothing is re-asked at the stage it saved).
+func (w *WajoFo) Collect(p extPending) (ExtReply, error) {
+	return w.resume(p.Conv, p.Stage, p.Part1, nil, w.deadline())
 }
 
 // fetchImageBytes downloads a signed image link with curl: https only, a size cap, no credentials, no redirects.

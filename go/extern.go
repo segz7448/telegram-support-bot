@@ -32,6 +32,8 @@ type ExtRequest struct {
 
 type ExtReply struct {
 	Pending string // conversation id of a request still running at the service (nothing is re-sent for it)
+	Stage   string // where that request is (saved with it)
+	Part1   string // first part of the picture link, when that is the stage
 	Text    string
 	Image   []byte // optional picture (PNG/JPEG) returned by the assistant
 }
@@ -43,12 +45,14 @@ type ExternalAnswerer interface {
 
 // Collector is implemented by answerers that can fetch the result of a request that was still running.
 type Collector interface {
-	Collect(conv string) (ExtReply, error)
+	Collect(p extPending) (ExtReply, error)
 }
 
 type extPending struct {
 	Owner   string    `json:"owner"`
 	Conv    string    `json:"conv"`
+	Stage   string    `json:"stage"`
+	Part1   string    `json:"part1,omitempty"`
 	Started time.Time `json:"started"`
 }
 
@@ -120,10 +124,13 @@ func (g *extGate) route(chat, text string) (reply string, img []byte, handled bo
 		return "", nil, false
 	}
 	if wantImg && !g.A.CanImages() {
-		return "I can't return pictures from the outside assistant here yet.", nil, true
+		return "I can't make pictures here yet.", nil, true
 	}
 	if g.loadPending() != nil {
 		return "An earlier outside-assistant request is still saved. Say \"check answer\" to collect it or \"drop it\" first. I won't start a second one on top of it.", nil, true
+	}
+	if wantImg && reExtAction.MatchString(imageSubject(t)) {
+		return "A picture request can only describe the picture. Leave out anything that asks for an action (calling, messaging, ordering and so on) and try again. I did not send or pass on anything.", nil, true
 	}
 	if !g.take() {
 		return "The daily limit for outside-assistant requests is used up. It resets tomorrow.", nil, true
@@ -163,7 +170,7 @@ func (g *extGate) loadPending() *extPending {
 	return &p
 }
 
-func (g *extGate) savePending(conv string) error {
+func (g *extGate) savePending(conv, stage, part1 string) error {
 	if g.PendingFile == "" {
 		return fmt.Errorf("no store")
 	}
@@ -171,7 +178,7 @@ func (g *extGate) savePending(conv string) error {
 	if g.Now != nil {
 		now = g.Now
 	}
-	b, _ := json.Marshal(extPending{Owner: g.Owner, Conv: conv, Started: now()})
+	b, _ := json.Marshal(extPending{Owner: g.Owner, Conv: conv, Stage: stage, Part1: part1, Started: now()})
 	tmp := g.PendingFile + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
@@ -193,7 +200,7 @@ func (g *extGate) shape(r ExtReply, err error) (string, []byte) {
 		return "I couldn't get an answer from the outside assistant. I can't tell whether it started working on the request, and I won't send it again by myself. Ask again if you want a new attempt.", nil
 	}
 	if r.Pending != "" {
-		if g.savePending(r.Pending) != nil {
+		if g.savePending(r.Pending, r.Stage, r.Part1) != nil {
 			return "The outside assistant is still working, but I can't save the request to collect it later, so I won't promise a follow-up. I won't re-send it either.", nil
 		}
 		return "The outside assistant is still working on it. Say \"check answer\" to collect it, or \"drop it\" to forget it. I won't re-send the request.", nil
@@ -205,7 +212,7 @@ func (g *extGate) shape(r ExtReply, err error) (string, []byte) {
 	if ans == "" && len(r.Image) == 0 {
 		return "The outside assistant sent back nothing usable.", nil
 	}
-	return fmt.Sprintf("From the outside assistant (unchecked, may be wrong):\n%s", ans), r.Image
+	return fmt.Sprintf("Unchecked, may be wrong:\n%s", ans), r.Image
 }
 
 // pendingCmd handles "check answer" / "drop it" for the owner when a saved request exists.
@@ -225,11 +232,12 @@ func (g *extGate) pendingCmd(chat, text string) (string, []byte, bool) {
 	if !ok {
 		return "I can't collect that here.", nil, true
 	}
-	r, err := c.Collect(p.Conv)
+	r, err := c.Collect(*p)
 	if err != nil {
 		return "I couldn't reach the outside assistant to collect it. The request is still saved. Try \"check answer\" again later, or \"drop it\".", nil, true
 	}
 	if r.Pending != "" {
+		g.savePending(r.Pending, r.Stage, r.Part1) // keep the stage and any saved part
 		return "Still working. Say \"check answer\" again later.", nil, true
 	}
 	g.clearPending()

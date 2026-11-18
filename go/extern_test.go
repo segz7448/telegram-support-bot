@@ -32,7 +32,7 @@ func TestExtOwnerOnlyAndFailClosed(t *testing.T) {
 	e := newGmEnv(t)
 	e.c.Ext = &extGate{A: f, Owner: "5"}
 	r, _ := e.send("5", "compare these two business plans and explain the risks")
-	if len(f.asked) != 1 || !strings.Contains(r, "outside assistant") || len(e.s.qs) != 0 {
+	if len(f.asked) != 1 || !strings.Contains(r, "Unchecked, may be wrong") || len(e.s.qs) != 0 {
 		t.Fatalf("owner request not answered: %q asked=%v", r, f.asked)
 	}
 }
@@ -68,7 +68,7 @@ func TestExtImageAndLimits(t *testing.T) {
 	g := &fakeExt{img: false}
 	e2 := newGmEnv(t)
 	e2.c.Ext = &extGate{A: g, Owner: "5"}
-	if r, _ := e2.send("5", "draw me a picture of a cat"); len(g.asked) != 0 || !strings.Contains(r, "can't return pictures") {
+	if r, _ := e2.send("5", "draw me a picture of a cat"); len(g.asked) != 0 || !strings.Contains(r, "can't make pictures") {
 		t.Errorf("no-image answerer: %q", r)
 	}
 	h := &fakeExt{err: errors.New("down")}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,37 +86,6 @@ func TestWajoErrorsAndNoKey(t *testing.T) {
 	}
 }
 
-func TestWajoImageLinkValidation(t *testing.T) {
-	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 40)...)
-	good := "Here: https://storage.googleapis.com/bucket/dog.png?X-Goog-Signature=abc"
-	m := &mockPoster{replies: []string{sse("Made it.", "complete", "c1"), sse(good, "complete", "c1")}}
-	w := newWajo(t, m)
-	w.Images = true
-	var asked string
-	w.Get = func(u string, max int) ([]byte, error) { asked = u; return png, nil }
-	r, err := w.Ask(ExtRequest{Text: "generate image of a dog", Image: true})
-	if err != nil || len(r.Image) == 0 || !strings.HasPrefix(asked, "https://storage.googleapis.com/") {
-		t.Fatalf("image not fetched: %v %q", err, asked)
-	}
-	// wrong host, or non-image bytes: no image
-	for _, link := range []string{"https://evil.example/dog.png", "http://storage.googleapis.com/x.png"} {
-		m := &mockPoster{replies: []string{sse("Made it.", "complete", "c1"), sse(link, "complete", "c1")}}
-		w := newWajo(t, m)
-		w.Images = true
-		w.Get = func(u string, max int) ([]byte, error) { t.Errorf("fetched %s", u); return png, nil }
-		if r, _ := w.Ask(ExtRequest{Text: "generate image of a dog", Image: true}); len(r.Image) != 0 {
-			t.Errorf("image from %s", link)
-		}
-	}
-	m2 := &mockPoster{replies: []string{sse("Made it.", "complete", "c1"), sse(good, "complete", "c1")}}
-	w2 := newWajo(t, m2)
-	w2.Images = true
-	w2.Get = func(u string, max int) ([]byte, error) { return []byte("<html>not an image at all</html>"), nil }
-	if r, _ := w2.Ask(ExtRequest{Text: "generate image of a dog", Image: true}); len(r.Image) != 0 {
-		t.Error("non-image bytes accepted")
-	}
-}
-
 func TestExtPendingNoDuplicateAndRecovery(t *testing.T) {
 	m := &mockPoster{replies: []string{sse("", "working", "cP")}}
 	w := newWajo(t, m)
@@ -167,13 +135,13 @@ func TestExtPendingNoDuplicateAndRecovery(t *testing.T) {
 		t.Fatalf("%q", r)
 	}
 	// drop
-	g.savePending("cQ")
+	g.savePending("cQ", "text", "")
 	r, _, _ = g.route("42", "drop it")
 	if !strings.Contains(r, "Dropped") || g.loadPending() != nil {
 		t.Fatalf("%q", r)
 	}
 	// groups never reach it
-	g.savePending("cQ")
+	g.savePending("cQ", "text", "")
 	if _, _, ok := g.route("-100", "check answer"); ok {
 		t.Fatal("group handled")
 	}
@@ -187,55 +155,125 @@ func TestExtErrorWordingNoFalseDenial(t *testing.T) {
 	}
 }
 
-func TestJoinLinkParts(t *testing.T) {
-	full := "https://storage.googleapis.com/b/o.png?X-Goog-Signature=" + strings.Repeat("ab", 300)
-	var sb strings.Builder
-	n := 0
-	for i := 0; i < len(full); i += 250 {
-		n++
+func imgLink() string {
+	return "https://storage.googleapis.com/bkt/dog.png?X-Goog-Algorithm=GOOG4&X-Goog-Credential=abc&X-Goog-Signature=" + strings.Repeat("a1", 256)
+}
+
+func TestWajoImageTwoPartFlow(t *testing.T) {
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 40)...)
+	l := imgLink()
+	p1, p2 := l[:598], l[598:]
+	m := &mockPoster{replies: []string{sse("Dog made", "complete", "c1"), sse(p1, "complete", "c1"), sse(p2, "complete", "c1")}}
+	w := newWajo(t, m)
+	w.Images = true
+	var asked string
+	gets := 0
+	w.Get = func(u string, max int) ([]byte, error) { gets++; asked = u; return png, nil }
+	g := &extGate{A: w, Owner: "42", PerDay: 5}
+	r, img, ok := g.route("42", "Generate image of a golden dog on grass")
+	_ = r
+	// action words anywhere are only blocked by the lead rule; this one starts with "generate", so it is composed
+	if !ok || len(img) == 0 || asked != l || gets != 1 {
+		t.Fatalf("ok=%v img=%d gets=%d asked==link:%v reply=%q", ok, len(img), gets, asked == l, r)
 	}
-	k := 0
-	for i := 0; i < len(full); i += 250 {
-		j := i + 250
-		if j > len(full) {
-			j = len(full)
-		}
-		k++
-		sb.WriteString("PART " + fmt.Sprint(k) + "/" + fmt.Sprint(n) + ": " + full[i:j] + "\n")
+	if len(m.calls) != 3 {
+		t.Fatalf("expected 3 service calls, got %d", len(m.calls))
 	}
-	if got := joinLinkParts(sb.String()); got != full {
-		t.Fatalf("rebuild failed: %d vs %d", len(got), len(full))
+	if !strings.Contains(m.calls[0], "Generate an image of: ") || strings.Contains(m.calls[0], "for me") {
+		t.Fatalf("subject not sanitised or raw text forwarded: %s", m.calls[0])
 	}
-	if joinLinkParts("PART 1/3: aaa\nPART 3/3: ccc") != "" || joinLinkParts("PART 1/2: a\nPART 1/2: b") != "" {
-		t.Fatal("incomplete or duplicate parts accepted")
+	if strings.Count(strings.Join(m.calls, "|"), "Generate an image") != 1 {
+		t.Fatal("picture asked more than once")
+	}
+	if !strings.Contains(m.calls[1], "Do not make a new image") || !strings.Contains(m.calls[2], "598") {
+		t.Fatal("link asks wrong")
+	}
+	if len(g.TakeImage("42")) == 0 || len(g.TakeImage("42")) != 0 {
+		t.Fatal("image should be handed over once")
 	}
 }
 
-func TestWajoImageUsesPartsAndOneFollowUp(t *testing.T) {
+func TestWajoImageBadLinkOrBytes(t *testing.T) {
 	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 40)...)
-	parts := "PART 1/2: https://storage.googleapis.com/b/d.png?X-Goog-Signature=\nPART 2/2: abcdef"
-	m := &mockPoster{replies: []string{sse("Made it.", "complete", "c1"), sse(parts, "complete", "c1")}}
+	l := imgLink()
+	clipped := l[:len(l)-3] // 509-hex signature
+	for name, tc := range map[string]struct {
+		p1, p2 string
+		body   []byte
+	}{
+		"clipped sig": {l[:598], clipped[598:], png},
+		"wrong host":  {"https://evil.example/" + strings.Repeat("x", 120), "yy", png},
+		"not image":   {l[:598], l[598:], []byte("<html>no</html> padding padding")},
+	} {
+		m := &mockPoster{replies: []string{sse("made", "complete", "c1"), sse(tc.p1, "complete", "c1"), sse(tc.p2, "complete", "c1")}}
+		w := newWajo(t, m)
+		w.Images = true
+		w.Get = func(u string, max int) ([]byte, error) {
+			if name != "not image" {
+				t.Errorf("%s: fetched %s", name, u)
+			}
+			return tc.body, nil
+		}
+		g := &extGate{A: w, Owner: "42", PerDay: 5}
+		r, img, _ := g.route("42", "generate image of a dog")
+		if len(img) != 0 || !strings.Contains(r, "I won't make another one") {
+			t.Errorf("%s: img=%d r=%q", name, len(img), r)
+		}
+		if strings.Count(strings.Join(m.calls, "|"), "Generate an image") != 1 {
+			t.Errorf("%s: regenerated", name)
+		}
+	}
+}
+
+func TestWajoImagePendingResumesAtSavedStage(t *testing.T) {
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 40)...)
+	l := imgLink()
+	pf := filepath.Join(t.TempDir(), "p.json")
+	// first run: picture still working at the deadline
+	m := &mockPoster{replies: []string{sse("", "working", "c1")}}
 	w := newWajo(t, m)
-	w.Images = true
-	gets := 0
-	var asked string
-	w.Get = func(u string, max int) ([]byte, error) { gets++; asked = u; return png, nil }
+	w.Images, w.TotalSec = true, 1
+	w.Get = func(u string, max int) ([]byte, error) { return png, nil }
+	g := &extGate{A: w, Owner: "42", PerDay: 5, PendingFile: pf}
+	r, _, _ := g.route("42", "generate image of a dog")
+	if !strings.Contains(r, "check answer") || g.loadPending() == nil || g.loadPending().Stage != "gen" {
+		t.Fatalf("%q %+v", r, g.loadPending())
+	}
+	asks := strings.Count(strings.Join(m.calls, "|"), `"ask_fo"`)
+	// resume: picture done, first link part arrives still working -> saved at wait1
+	m.replies, m.i = []string{sse("done", "complete", "c1"), sse("", "working", "c1")}, 0
+	w.TotalSec = 1
+	r, _, _ = g.route("42", "check answer")
+	p := g.loadPending()
+	if p == nil || p.Stage != "wait1" {
+		t.Fatalf("stage not saved: %q %+v", r, p)
+	}
+	if strings.Count(strings.Join(m.calls, "|"), "Generate an image") != 1 || asks != 1 {
+		t.Fatal("regenerated")
+	}
+	// resume: part 1 arrives, part 2 still working -> wait2 with part1 saved
+	m.replies, m.i = []string{sse(l[:598], "complete", "c1"), sse("", "working", "c1")}, 0
+	w.TotalSec = 1
+	g.route("42", "check answer")
+	p = g.loadPending()
+	if p == nil || p.Stage != "wait2" || p.Part1 != l[:598] {
+		t.Fatalf("part1 not saved: %+v", p)
+	}
+	// resume: part 2 arrives -> image
+	m.replies, m.i = []string{sse(l[598:], "complete", "c1")}, 0
+	r, img, _ := g.route("42", "check answer")
+	if len(img) == 0 || g.loadPending() != nil {
+		t.Fatalf("no image: %q", r)
+	}
+}
+
+func TestWajoImageSubjectWithActionRefusedLocally(t *testing.T) {
+	m := &mockPoster{replies: []string{"{}"}}
+	w := newWajo(t, m)
+	w.Images, w.Get = true, func(string, int) ([]byte, error) { return nil, nil }
 	g := &extGate{A: w, Owner: "42", PerDay: 5}
-	r, img, ok := g.route("42", "generate image of a dog")
-	if !ok || len(img) == 0 || !strings.HasSuffix(asked, "Signature=abcdef") || gets != 1 || len(m.calls) != 2 {
-		t.Fatalf("ok=%v img=%d asked=%q gets=%d calls=%d reply=%q", ok, len(img), asked, gets, len(m.calls), r)
-	}
-	if len(g.TakeImage("42")) == 0 || len(g.TakeImage("42")) != 0 {
-		t.Fatal("image should be handed over exactly once")
-	}
-	// download failure: text only, no regeneration, no extra asks
-	m2 := &mockPoster{replies: []string{sse("Made it.", "complete", "c1"), sse(parts, "complete", "c1")}}
-	w2 := newWajo(t, m2)
-	w2.Images = true
-	w2.Get = func(u string, max int) ([]byte, error) { return nil, fmt.Errorf("x") }
-	g2 := &extGate{A: w2, Owner: "42", PerDay: 5}
-	_, img2, _ := g2.route("42", "generate image of a dog")
-	if len(img2) != 0 || len(m2.calls) != 2 {
-		t.Fatalf("img=%d calls=%d", len(img2), len(m2.calls))
+	r, _, ok := g.route("42", "generate image of a dog and also call my bank")
+	if !ok || len(m.calls) != 0 || !strings.Contains(r, "did not send or pass on anything") {
+		t.Fatalf("%q calls=%d", r, len(m.calls))
 	}
 }
