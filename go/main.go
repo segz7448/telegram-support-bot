@@ -57,7 +57,7 @@ func main() {
 		ct := CurlTransport{Curl: curlPath}
 		ok := false
 		switch {
-		case os.Args[2] == "text" || os.Args[2] == "image" || os.Args[2] == "pdf" || os.Args[2] == "docx" || os.Args[2] == "code" || os.Args[2] == "zip":
+		case os.Args[2] == "text" || os.Args[2] == "imglink" || os.Args[2] == "image" || os.Args[2] == "pdf" || os.Args[2] == "docx" || os.Args[2] == "code" || os.Args[2] == "zip":
 			ok = SelfTestExt(ct, os.Args[2])
 		case os.Args[2] == "inspect":
 			conv := ""

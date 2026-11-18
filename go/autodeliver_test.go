@@ -88,3 +88,57 @@ func TestDroppedJobIsNeverDelivered(t *testing.T) {
 		t.Fatalf("dropped result was delivered: %v", k.msgs)
 	}
 }
+
+type neverReady struct {
+	mu      sync.Mutex
+	asks    int
+	collect int
+}
+
+func (n *neverReady) Ask(r ExtRequest) (ExtReply, error) {
+	n.mu.Lock()
+	n.asks++
+	n.mu.Unlock()
+	return ExtReply{Pending: "conv-1", Stage: stText}, nil
+}
+func (n *neverReady) CanImages() bool { return false }
+func (n *neverReady) Collect(p extPending) (ExtReply, error) {
+	n.mu.Lock()
+	n.collect++
+	n.mu.Unlock()
+	return ExtReply{Pending: p.Conv, Stage: p.Stage}, nil
+}
+
+func TestBackgroundCapStopsPollingKeepsRecordNoReask(t *testing.T) {
+	oldMax, oldGap := extBackgroundMax, extPollGap
+	extBackgroundMax, extPollGap = 80*time.Millisecond, 10*time.Millisecond
+	defer func() { extBackgroundMax, extPollGap = oldMax, oldGap }()
+	a := &neverReady{}
+	k := &sink{}
+	g := &extGate{A: a, Owner: "42", PerDay: 5, Wait: 20 * time.Millisecond, Deliver: k.put, PendingFile: t.TempDir() + "/p.json"}
+	g.route("42", "explain in a few words what a mortgage is for me please")
+	deadline := time.Now().Add(3 * time.Second)
+	for k.n() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if k.n() != 1 || !strings.Contains(k.msgs[0], "still not ready") {
+		t.Fatalf("expected one not-ready message, got %v", k.msgs)
+	}
+	time.Sleep(150 * time.Millisecond)
+	a.mu.Lock()
+	asks, c1 := a.asks, a.collect
+	a.mu.Unlock()
+	time.Sleep(100 * time.Millisecond)
+	a.mu.Lock()
+	c2 := a.collect
+	a.mu.Unlock()
+	if asks != 1 || c1 == 0 || c2 != c1 || k.n() != 1 {
+		t.Fatalf("asks=%d polls=%d then %d msgs=%d: must ask once, stop polling after the cap, deliver once", asks, c1, c2, k.n())
+	}
+	if p := g.loadPending(); p == nil || p.Conv != "conv-1" {
+		t.Fatalf("saved record must stay for check answer / drop it: %+v", p)
+	}
+	if r, _, ok := g.route("42", "drop it"); !ok || g.loadPending() != nil {
+		t.Fatalf("drop it must clear the record: %q", r)
+	}
+}

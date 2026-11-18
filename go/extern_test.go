@@ -9,12 +9,14 @@ import (
 
 type fakeExt struct {
 	asked []string
+	raws  []string
 	img   bool
 	err   error
 }
 
 func (f *fakeExt) Ask(r ExtRequest) (ExtReply, error) {
 	f.asked = append(f.asked, r.Text)
+	f.raws = append(f.raws, r.Raw)
 	return ExtReply{Text: "answer"}, f.err
 }
 func (f *fakeExt) CanImages() bool { return f.img }

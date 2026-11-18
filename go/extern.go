@@ -132,6 +132,24 @@ func (g *extGate) route(chat, text string) (reply string, img []byte, handled bo
 	if false {
 		return "That sounds like an action (a call, message, order or similar). I won't do it or pass it on without the details and your go-ahead. Tell me exactly who or what it is for and what it should say, and I'll check back with you before anything happens. I did not send or pass on anything.", nil, true
 	}
+	if _, ip, why, ok, trig := imageLinkTask(t); trig {
+		if !ok {
+			return why + " I did not send anything.", nil, true
+		}
+		if g.loadPending() != nil {
+			return "An earlier request is still saved. Say \"check answer\" to collect it or \"drop it\" first. I won't start a second one on top of it.", nil, true
+		}
+		if !g.take() {
+			return "The daily limit for outside requests is used up. It resets tomorrow.", nil, true
+		}
+		g.beginPending("", "asking", "")
+		j := g.startJobFor(chat, func(prog func(conv, stage, part1 string)) (ExtReply, error) {
+			g.setProgress(prog)
+			return g.A.Ask(ExtRequest{Raw: ip})
+		})
+		txt, img := g.await(chat, j)
+		return txt, img, true
+	}
 	if kind, opt, slot := fileRequest(t); kind != "" {
 		if g.loadPending() != nil {
 			return "An earlier request is still saved. Say \"check answer\" to collect it or \"drop it\" first. I won't start a second one on top of it.", nil, true
@@ -311,7 +329,7 @@ func (g *extGate) startJobFor(chat string, run func(prog func(conv, stage, part1
 				pp.Kind, pp.Opt = g.curKind, g.curOpt
 				g.mu.Unlock()
 				g.savePending(pp.Conv, pp.Stage, pp.Part1)
-				time.Sleep(5 * time.Second)
+				time.Sleep(extPollGap)
 				j.r, j.err = c.Collect(pp)
 			}
 		}
@@ -361,7 +379,10 @@ const extStillWorkingAuto = "Still working. It is running in the background and 
 
 // extBackgroundMax bounds how long one background worker keeps polling a request. After that the request stays saved
 // for "check answer" and the user is told.
-const extBackgroundMax = 15 * time.Minute
+var extBackgroundMax = 15 * time.Minute
+
+// extPollGap is the pause between background polls (a variable so tests can shorten it).
+var extPollGap = 5 * time.Second
 
 const extNotReady = "The request is still not ready at the service after about 15 minutes. It is saved and I won't re-send it or keep polling. Say \"check answer\" later to look again, or \"drop it\" to forget it."
 

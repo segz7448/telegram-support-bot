@@ -266,7 +266,8 @@ func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
 		}
 		return w.resume(conv, stGen, "", res, dl)
 	}
-	res, err := w.call("ask_fo", map[string]any{"message": fmt.Sprintf(wajoPreamble, r.Text), "newConversation": true}, 130)
+	msg := wireText(r, w)
+	res, err := w.call("ask_fo", map[string]any{"message": msg, "newConversation": true}, 130)
 	if err != nil {
 		return ExtReply{}, err
 	}
@@ -553,4 +554,13 @@ func longestToken(s string) string {
 		}
 	}
 	return best
+}
+
+// wireText is the message sent for a plain (non-file, non-picture) request: an internally composed prompt as is,
+// otherwise the owner's text inside the standard preamble.
+func wireText(r ExtRequest, w *WajoFo) string {
+	if r.Raw != "" { // composed internally (picture links), never from raw user text
+		return r.Raw
+	}
+	return fmt.Sprintf(wajoPreamble, r.Text)
 }

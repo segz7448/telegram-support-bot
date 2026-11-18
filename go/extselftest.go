@@ -34,6 +34,8 @@ func SelfTestExt(ct CurlTransport, step string) bool {
 	g := &extGate{A: wf, Owner: "selftest", PerDay: 5, PendingFile: pf, Wait: 30 * time.Second}
 	msg := "explain in a few lines what a mortgage is"
 	switch step {
+	case "imglink":
+		msg = os.Getenv("TG_SELFTEST_MSG")
 	case "image":
 		msg = "generate image of a golden dog on grass"
 	case "pdf":
@@ -83,6 +85,9 @@ func SelfTestExt(ct CurlTransport, step string) bool {
 		rep := DescribeUpload(f.Name, f.Data)
 		fmt.Printf("PASS file built from the service reply: %s, %d bytes, sha256 %x, saved %s\nREADBACK %s\n", f.Name, len(f.Data), sum, name, clip(strings.Join(strings.Fields(rep), " "), 400))
 		return true
+	}
+	if step == "imglink" {
+		os.WriteFile(filepath.Join(out, "ext-selftest-imglink.txt"), []byte(txt), 0o600)
 	}
 	if step != "image" {
 		p := strings.Join(strings.Fields(txt), " ")
