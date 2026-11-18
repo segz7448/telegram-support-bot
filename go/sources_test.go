@@ -136,3 +136,20 @@ func TestIdentityReachesChatBeforeSearch(t *testing.T) {
 		t.Fatal(r)
 	}
 }
+
+func TestFounderDetailsAndNoInventedHistory(t *testing.T) {
+	for _, q := range []string{"who is your founder", "who founded you", "how can I contact you", "contact the owner", "what is your website", "founder email"} {
+		r, ok := identityReply(q)
+		if !ok || !strings.Contains(r, "https://novamail.store") || !strings.Contains(r, "info@novamail.store") || !strings.Contains(r, "https://profile.novamail.store") {
+			t.Fatalf("%q: %q", q, r)
+		}
+		if !strings.Contains(r, "won't invent") || !strings.Contains(r, "can't read or send email") {
+			t.Fatalf("%q lacks honesty lines: %q", q, r)
+		}
+	}
+	for _, q := range []string{"who is the founder of Microsoft", "who founded Apple", "contact the school office"} {
+		if r, ok := identityReply(q); ok {
+			t.Fatalf("general question hijacked: %q -> %q", q, r)
+		}
+	}
+}

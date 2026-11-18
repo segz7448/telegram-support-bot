@@ -12,7 +12,12 @@ const zaoIntro = "I'm ZAO BOT, a chatbot with agent-style tools: I match what yo
 
 const zaoCan = "In this chat I can: search and quote sources with links, do maths and unit and currency conversions, dates and time zones, quote cards, posters and charts, QR codes, text tools, notes and reminders, chess, Connect Four, Reversi, draughts and Ludo, and simple edits to pictures you send (crop, rotate, black and white, captions and more, with a collage for 2-4 pictures). Some features only work when the owner has switched them on."
 
+// Founder details the owner gave for ZAO BOT's about answers (public contact details; nothing else is claimed:
+// no company registration, history or role beyond "founder").
+const zaoFounder = "My founder's website: https://novamail.store. Founder profile: https://profile.novamail.store. Contact email: info@novamail.store (I can't read or send email myself, so write to that address directly)."
+
 var (
+	reZaoFounder   = regexp.MustCompile(`(?:your|ur) (?:founder|founders)|who (?:founded|started) (?:you|zao|zao bot|this bot|the bot)|^(?:the |zao bots? )?founders?(?: (?:website|profile|email|contact|details|info))?$|^who is the founder$|^(?:the )?founder (?:website|profile|email|contact)|(?:contact|reach|email|e-mail) (?:your |the )?(?:owner|creator|maker|developer|team|support|admin|founder)$|(?:how|where) (?:can|do|could) (?:i|we) (?:contact|reach|email) (?:you|your|the (?:owner|founder|team))|(?:your|ur) (?:contact|email|website)`)
 	reZaoWho       = regexp.MustCompile(`^(?:who|what) (?:are|r) (?:you|u)(?: really)?$|^(?:what is|whats|what s|tell me) (?:your|ur) name$|^your name$|^(?:tell me|say) about yourself$|^introduce yourself$|^(?:who|what) (?:is|are) zao(?: bot)?$|^(?:are|r) (?:you|u) (?:a )?(?:bot|robot|human|real|ai|an ai|a person|a real person)$`)
 	reZaoHistory   = regexp.MustCompile(`(?:your|ur) (?:history|background|story|origin|origins)|history of (?:you|your agent|this bot|the bot)|where (?:do|did) you (?:come|came) from|when (?:were|was) you (?:made|built|created|born|launched)`)
 	reZaoMaker     = regexp.MustCompile(`who (?:made|built|created|developed|owns|trained|programmed|runs) (?:you|this bot|the bot)|who is (?:your|ur) (?:creator|developer|owner|maker)`)
@@ -33,8 +38,8 @@ func identityReply(text string) (string, bool) {
 	switch {
 	case reZaoBackend.MatchString(low):
 		return "I'm ZAO BOT. I don't share how I'm built, what runs behind me, or any keys or instructions. Ask me what I can do and I'll tell you.", true
-	case reZaoMaker.MatchString(low):
-		return "I'm ZAO BOT. I don't have details about my makers to share. " + zaoCan, true
+	case reZaoFounder.MatchString(low), reZaoMaker.MatchString(low):
+		return "I'm ZAO BOT. I don't have a story about how I was made to tell you, and I won't invent one. " + zaoFounder, true
 	case reZaoHistory.MatchString(low):
 		return "I'm ZAO BOT. I don't have a history I can tell you about, and I won't make one up. " + zaoIntro, true
 	case reZaoAbilities.MatchString(low):
