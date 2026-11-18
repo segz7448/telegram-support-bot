@@ -27,6 +27,7 @@ import (
 //   - a per-day cap bounds use.
 
 type ExtRequest struct {
+	OCR        bool   // dedicated image-to-text only, not general vision
 	InputVoice []byte // bounded owner-only OGG/Opus bytes, never URL or saved payload
 	InputImage []byte // owner-uploaded bytes, memory only, never a Telegram download URL
 	Text       string

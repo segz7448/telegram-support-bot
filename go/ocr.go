@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// Local OCR through a tesseract program that is already installed on the machine. Nothing is installed or downloaded
-// by the bot, nothing leaves the machine, and without the program the bot says so plainly instead of guessing.
+// Legacy local OCR helper retained for historical tests only. The production photo handler
+// routes OCR exclusively through the separately gated Wajo route and never calls this helper.
 
 var reOCR = regexp.MustCompile(`(?i)\bocr\b|\b(?:extract|read|scan|transcribe|copy|get|pull|grab|give me|what(?:'s| is| does)?)\b.{0,40}\b(?:text|words|writing|says?|written)\b|\btext\s+(?:in|from|on|of)\s+(?:this|the|that)\b|\bwhat does (?:it|this|that|the \w+) say\b`)
 

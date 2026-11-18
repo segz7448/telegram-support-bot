@@ -1,4 +1,6 @@
-# Offline text-to-audio candidate, default off
+# Withdrawn offline text-to-audio trial
+
+Withdrawn November18,2026 at the owner's request. Text-to-speech is out of project scope. Do not deploy or enable this candidate. It was never enabled in production. The instructions below are retained as historical trial evidence, not an active feature or rollout offer. STT and image work are separate.
 
 Independent from speech recognition. No model reasoning or cloud service.
 Enable candidate only with TG_LOCAL_TTS=1, existing TG_OWNER_ID and absolute

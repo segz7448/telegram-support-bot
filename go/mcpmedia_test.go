@@ -304,7 +304,7 @@ func TestMediaPreviewPrivateFixture(t *testing.T) {
 	t.Logf("pixel-exact preview, dataURI chars=%d bytes=%d", len(uri), len(raw))
 }
 
-func TestMediaSeparateGatesPreserveLocalOCRAndEdits(t *testing.T) {
+func TestMediaSeparateGatesNoLocalOCRAndPreserveEdits(t *testing.T) {
 	mp := &mockPoster{replies: []string{`{}`}}
 	w := newWajo(t, mp)
 	w.Media = true
@@ -316,8 +316,8 @@ func TestMediaSeparateGatesPreserveLocalOCRAndEdits(t *testing.T) {
 	g := &extGate{A: w, Owner: "42", PendingFile: filepath.Join(t.TempDir(), "pending")}
 	r := &Runner{T: tr, StatePath: filepath.Join(t.TempDir(), "state"), Chat: &Chat{Ext: g}}
 	t.Setenv("TG_TESSERACT", "/nonexistent/tesseract")
-	if ans := r.handlePhoto(42, "f", 100, "read the text in this picture"); !strings.HasPrefix(ans, ocrMissing) {
-		t.Fatal("local OCR rerouted", ans)
+	if ans := r.handlePhoto(42, "f", 100, "read the text in this picture"); !strings.Contains(ans, "Wajo OCR is off") {
+		t.Fatal("OCR failed to stay Wajo-only", ans)
 	}
 	if ans := r.handlePhoto(42, "f", 100, "grayscale"); ans != "" || tr.photos != 1 {
 		t.Fatal("local edit rerouted", ans, tr.photos)

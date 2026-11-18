@@ -32,6 +32,7 @@ type WajoFo struct {
 	MediaURL     string
 	MediaAgentID string // non-secret account agent identifier supplied by local config, never baked into public code
 	InputVoice   bool   // separate opt-in for short owner-private voice transcription
+	InputOCR     bool   // owner-private OCR only; independent of general vision
 	InputVision  bool   // private uploaded-image analysis requires its own opt-in
 	InputEdits   bool   // remote input editing requires its own opt-in; disabled after fidelity failure
 	Get          func(rawURL string, maxBytes int) ([]byte, error)
@@ -475,7 +476,7 @@ func linkShape(link, why string) string {
 
 // Collect resumes a saved request by polling its conversation (nothing is re-asked at the stage it saved).
 func (w *WajoFo) Collect(p extPending) (ExtReply, error) {
-	if p.Stage == stMediaVoice || p.Stage == stMediaImage || p.Stage == stMediaVision || p.Stage == stMediaEdit {
+	if p.Stage == stMediaOCR || p.Stage == stMediaVoice || p.Stage == stMediaImage || p.Stage == stMediaVision || p.Stage == stMediaEdit {
 		w.kindCur = ""
 		return w.collectMedia(p.Conv, p.Stage, nil, w.deadline())
 	}

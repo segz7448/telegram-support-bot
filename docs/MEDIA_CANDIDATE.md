@@ -7,12 +7,13 @@ Candidate status, 2026-11-18: not deployed. The live phone is unchanged.
 The existing owner-only outside-assistant setup still requires `TG_EXT_ENABLE=1`, the verified owner ID, and `TG_EXT_KEY_FILE`.
 
 - `TG_EXT_IMAGES=1`: enables generated-image output over MCP. Requires `TG_EXT_MEDIA_AGENT_ID`, the existing account's non-secret agent identifier supplied in local configuration. The identifier is not embedded in this repository.
+- `TG_EXT_OCR=1`: owner-private text extraction only, returning unchecked text from a metadata-free small preview. Verify names, numbers and missing text. Does not enable description or remote editing.
 - `TG_EXT_VISION=1`: separately opts in to sending owner-private captioned picture previews. Leave OFF for this candidate. Description quality was incomplete on the actual fixture.
 - `TG_EXT_IMAGE_EDITS=1`: separately opts in to remote preview edits, and is effective only with image output enabled. Leave OFF for this candidate. The actual remote edit changed layout and omitted content.
-- All three switches default OFF. Turning on generation does not turn on private-picture analysis or remote edits.
+- All input switches default OFF. Turning on generation does not turn on private-picture analysis or remote edits.
 - `TG_EXT_MEDIA_URL`, if supplied, must equal the official MCP endpoint; other destinations are refused before key use.
 
-Existing local photo effects, grayscale and local OCR remain local and retain precedence. No audio or private-video route is implemented by this patch. Existing public-picture-link handling is unchanged.
+Owner-private OCR now routes only through Wajo with TG_EXT_OCR=1, independently of general vision. No local OCR fallback is used. Other users cannot access the owner account. Local photo effects and grayscale stay local. No audio or private-video route is implemented by this patch. Existing public-picture-link handling is unchanged.
 
 ## What changed
 

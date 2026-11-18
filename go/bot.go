@@ -255,12 +255,18 @@ func (r *Runner) handlePhoto(cid int64, fileID string, size int, caption string)
 			return ""
 		}()
 	}
-	if wantOCR && ocrPath() == "" {
-		return ocrMissing + photoHelp
+	if wantOCR {
+		if r.Chat == nil || r.Chat.Ext == nil || !r.Chat.Ext.allowed(fmt.Sprint(cid)) {
+			return "OCR is available only in the owner private chat through Wajo. No local OCR fallback is used."
+		}
+		w, ok := r.Chat.Ext.A.(*WajoFo)
+		if !ok || !w.Media || !w.InputOCR {
+			return "Wajo OCR is off on this bot. No local OCR fallback is used."
+		}
 	}
 	fg, ok1 := r.T.(FileGetter)
 	ps, ok2 := r.T.(PhotoSender)
-	if !ok1 || !ok2 {
+	if !ok1 || (!ok2 && !wantOCR) {
 		return "Picture editing isn't available on this connection."
 	}
 	if size > maxImageBytes {
@@ -294,11 +300,11 @@ func (r *Runner) handlePhoto(cid int64, fileID string, size int, caption string)
 		return photoNoVision + photoHelp
 	}
 	if wantOCR {
-		txt, oerr := OCRImage(data, filepath.Dir(r.StatePath))
-		if oerr != nil {
-			return "I couldn't read text from that picture: " + oerr.Error() + ". I won't guess what it says."
+		msg, handled := r.Chat.Ext.mediaWork(fmt.Sprint(cid), caption, data)
+		if handled {
+			return msg
 		}
-		return txt
+		return "Wajo OCR is unavailable. No local OCR fallback was used."
 	}
 	out, dims, err := EditImage(data, ops)
 	if err != nil {
@@ -333,8 +339,6 @@ func validMessage(u map[string]any) (int64, string, bool) {
 }
 
 type Runner struct {
-	TTS         SpeechMaker
-	TTSOwner    string
 	T           Transport
 	API, Token  string
 	Brain       *Brain
@@ -719,16 +723,7 @@ func (r *Runner) Run() error {
 						call(r.T, r.API, r.Token, "sendChatAction", url.Values{"chat_id": {fmt.Sprint(cid)}, "action": {"typing"}}, 5)
 					}
 					var reply string
-					if reply == "" && !sent {
-						if msg, handledSay := r.handleSay(cid, text); handledSay {
-							reply = msg
-							if msg == "" {
-								sent = true
-								replies++
-								r.Log("local robotic voice upload confirmed")
-							}
-						}
-					}
+
 					if r.Chat != nil && !sent && reply == "" {
 						var cr *ChessReply
 						okc := false
