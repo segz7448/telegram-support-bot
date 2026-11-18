@@ -43,6 +43,12 @@ func main() {
 	}
 	curlPath := os.Getenv("TG_CURL")
 	tools := NewTools(CurlTransport{Curl: curlPath}, func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
+	if len(os.Args) > 2 && os.Args[1] == "--selftest-ext" && (os.Args[2] == "text" || os.Args[2] == "image") { // live service, no Telegram
+		if !SelfTestExt(CurlTransport{Curl: curlPath}, os.Args[2]) {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && (os.Args[1] == "--selftest" || os.Args[1] == "--selftest-net") {
 		if !SelfTest(b, tools, os.Args[1] == "--selftest-net") {
 			os.Exit(1)
