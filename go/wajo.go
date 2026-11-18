@@ -32,7 +32,8 @@ type WajoFo struct {
 	TotalSec int // overall wait; default 100
 	LastConv string
 	// Trace, if set, receives one short diagnostic line per step (stage, status, lengths, HTTP codes). Never URLs, keys or reply text.
-	Trace func(string)
+	Trace   func(string)
+	kindCur string
 	// Progress, if set, is told the conversation id and stage each time they change, so they can be saved.
 	Progress func(conv, stage, part1 string)
 }
@@ -212,6 +213,31 @@ func respText(res *rpcResp) string {
 
 func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
 	dl := w.deadline()
+	w.kindCur = r.Kind
+	if r.Kind != "" {
+		var msg string
+		if r.Kind == "doc" {
+			msg = "Write the text of this document: " + r.Text + "\nOutput ONLY the document text (headings with # and plain paragraphs), no introduction, no notes after it, no links, at most 1500 words. Do not take any other action."
+		} else {
+			msg = "Create the files for this project: " + r.Text + "\nOutput ONLY the files. Start each file with a line exactly like === FILE: relative/path.ext === followed by the file contents, and finish with a line exactly === END ===. Plain text files only, at most 20 files, no secrets, keys or credentials, nothing that has to be installed outside the files. Do not take any other action."
+		}
+		res, err := w.call("ask_fo", map[string]any{"message": msg, "newConversation": true}, 130)
+		if err != nil {
+			return ExtReply{}, err
+		}
+		conv := res.Result.StructuredContent.ConversationID
+		w.LastConv = conv
+		w.prog(conv, stText, "")
+		w.tr("stage=text(file %s) ask sent status=%s resp_len=%d", r.Kind, res.Result.StructuredContent.Status, len(respText(res)))
+		res, done, err := w.settle(res, conv, dl)
+		if err != nil {
+			return ExtReply{}, err
+		}
+		if !done {
+			return ExtReply{Pending: conv, Stage: stText}, nil
+		}
+		return w.resume(conv, stText, "", res, dl)
+	}
 	if r.Image {
 		sub := imageSubject(r.Text)
 		if sub == "" {
@@ -265,7 +291,11 @@ var reTokenOnly = regexp.MustCompile(`[A-Za-z0-9%_\-.~:/?#@!$&*+,;=]+`)
 
 func (w *WajoFo) txtOut(res *rpcResp) (string, bool) {
 	t := respText(res)
-	return t, !reWajoActionOut.MatchString(t)
+	chk := t
+	if w.kindCur != "" && len(t) > 800 { // file content is code or prose: look only at the start and end, where the service speaks for itself
+		chk = t[:400] + "\n" + t[len(t)-300:]
+	}
+	return t, !reWajoActionOut.MatchString(chk)
 }
 
 // resume continues a request from its stage. cur is the latest settled result for that stage, or nil to poll first.
@@ -396,6 +426,7 @@ func joinLink(p1, p2 string) string {
 
 // Collect resumes a saved request by polling its conversation (nothing is re-asked at the stage it saved).
 func (w *WajoFo) Collect(p extPending) (ExtReply, error) {
+	w.kindCur = p.Kind
 	w.tr("collect stage=%s", p.Stage)
 	return w.resume(p.Conv, p.Stage, p.Part1, nil, w.deadline())
 }

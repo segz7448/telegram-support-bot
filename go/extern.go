@@ -27,7 +27,8 @@ import (
 
 type ExtRequest struct {
 	Text  string
-	Image bool // the owner asked for a picture
+	Image bool   // the owner asked for a picture
+	Kind  string // "doc" or "code": a file is wanted (built locally from the reply)
 }
 
 type ExtReply struct {
@@ -53,6 +54,8 @@ type extPending struct {
 	Conv    string    `json:"conv"`
 	Stage   string    `json:"stage"`
 	Part1   string    `json:"part1,omitempty"`
+	Kind    string    `json:"kind,omitempty"`
+	Opt     string    `json:"opt,omitempty"`
 	Started time.Time `json:"started"`
 }
 
@@ -65,11 +68,13 @@ type extGate struct {
 	PendingFile string
 	img         map[string][]byte // at most one picture waiting to be sent per chat
 	// Wait is how long a request is awaited inline before it carries on in the background (default 25 s).
-	Wait time.Duration
-	job  *extJob
-	mu   sync.Mutex
-	day  string
-	used int
+	Wait            time.Duration
+	job             *extJob
+	curKind, curOpt string
+	file            map[string]*OutFile
+	mu              sync.Mutex
+	day             string
+	used            int
 }
 
 var (
@@ -121,6 +126,27 @@ func (g *extGate) route(chat, text string) (reply string, img []byte, handled bo
 	}
 	if false {
 		return "That sounds like an action (a call, message, order or similar). I won't do it or pass it on without the details and your go-ahead. Tell me exactly who or what it is for and what it should say, and I'll check back with you before anything happens. I did not send or pass on anything.", nil, true
+	}
+	if kind, opt, slot := fileRequest(t); kind != "" {
+		if g.loadPending() != nil {
+			return "An earlier request is still saved. Say \"check answer\" to collect it or \"drop it\" first. I won't start a second one on top of it.", nil, true
+		}
+		if slot == "" {
+			return "Tell me what the " + map[string]string{"doc": "document", "code": "code"}[kind] + " should be about.", nil, true
+		}
+		if !g.take() {
+			return "The daily limit for outside requests is used up. It resets tomorrow.", nil, true
+		}
+		g.mu.Lock()
+		g.curKind, g.curOpt = kind, opt
+		g.mu.Unlock()
+		g.beginPending("", "asking", "")
+		j := g.startJob(func(prog func(conv, stage, part1 string)) (ExtReply, error) {
+			g.setProgress(prog)
+			return g.A.Ask(ExtRequest{Text: slot, Kind: kind})
+		})
+		txt, img := g.await(chat, j)
+		return txt, img, true
 	}
 	wantImg := reExtImage.MatchString(t)
 	if !wantImg && !(reExtHard.MatchString(t) && len(strings.Fields(t)) >= 5) {
@@ -184,7 +210,7 @@ func (g *extGate) savePending(conv, stage, part1 string) error {
 	if g.Now != nil {
 		now = g.Now
 	}
-	b, _ := json.Marshal(extPending{Owner: g.Owner, Conv: conv, Stage: stage, Part1: part1, Started: now()})
+	b, _ := json.Marshal(extPending{Owner: g.Owner, Conv: conv, Stage: stage, Part1: part1, Kind: g.curKind, Opt: g.curOpt, Started: now()})
 	tmp := g.PendingFile + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
@@ -293,10 +319,51 @@ func (g *extGate) await(chat string, j *extJob) (string, []byte) {
 		g.savePending(r.Pending, r.Stage, r.Part1)
 		return extStillWorking, nil
 	}
+	p := g.loadPending()
+	kind, opt := g.curKind, g.curOpt
+	if p != nil && p.Kind != "" {
+		kind, opt = p.Kind, p.Opt
+	}
 	g.clearPending()
+	if kind != "" && r.Text != "" && r.Text != extActionNote {
+		g.mu.Lock()
+		g.curKind, g.curOpt = "", ""
+		g.mu.Unlock()
+		msg, f := buildFileReply(kind, opt, r.Text)
+		g.stashFile(chat, f)
+		return msg, nil
+	}
+	g.mu.Lock()
+	g.curKind, g.curOpt = "", ""
+	g.mu.Unlock()
 	t, img := g.shape(r, nil)
 	g.stashImage(chat, img)
 	return t, img
+}
+
+func (g *extGate) stashFile(chat string, f *OutFile) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.file == nil {
+		g.file = map[string]*OutFile{}
+	}
+	if f != nil {
+		g.file[chat] = f
+	} else {
+		delete(g.file, chat)
+	}
+}
+
+// TakeFile returns and clears the file waiting for this chat (the sender uploads it as a document).
+func (g *extGate) TakeFile(chat string) *OutFile {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	f := g.file[chat]
+	delete(g.file, chat)
+	return f
 }
 
 // pendingCmd handles "check answer" / "drop it" for the owner.
@@ -333,6 +400,9 @@ func (g *extGate) pendingCmd(chat, text string) (string, []byte, bool) {
 		return "I can't collect that here.", nil, true
 	}
 	pp := *p
+	g.mu.Lock()
+	g.curKind, g.curOpt = p.Kind, p.Opt
+	g.mu.Unlock()
 	j = g.startJob(func(prog func(conv, stage, part1 string)) (ExtReply, error) {
 		g.setProgress(prog)
 		return c.Collect(pp)

@@ -643,6 +643,11 @@ func (r *Runner) Run() error {
 						r.Log(fmt.Sprintf("reply sent (total %d, edited image)", replies))
 					}
 				}
+			} else if dcid, dfid, dsize, dname, isDoc := docMessage(u); isDoc && r.Chat != nil {
+				msg := r.handleDoc(dcid, dfid, dsize, dname)
+				call(r.T, r.API, r.Token, "sendMessage", url.Values{"chat_id": {fmt.Sprint(dcid)}, "text": {msg}}, 30)
+				replies++
+				r.Log(fmt.Sprintf("reply sent (total %d, file report)", replies))
 			} else if cid, text, ok := validMessage(u); ok {
 				now := time.Now()
 				q := rate[cid][:0:0]
@@ -736,6 +741,23 @@ func (r *Runner) Run() error {
 					if reply == "" && !sent {
 						reply = r.reply(text, fmt.Sprint(cid))
 						if r.Chat != nil && r.Chat.Ext != nil {
+							if f := r.Chat.Ext.TakeFile(fmt.Sprint(cid)); f != nil {
+								ok := false
+								if ds, okd := r.T.(DocSender); okd {
+									call(r.T, r.API, r.Token, "sendChatAction", url.Values{"chat_id": {fmt.Sprint(cid)}, "action": {"upload_document"}}, 5)
+									raw, derr := ds.PostDocument(r.API, r.Token, fmt.Sprint(cid), "Generated file (unchecked, not run)", f.Name, f.Data, filepath.Dir(r.StatePath), 90)
+									var body map[string]any
+									if derr == nil && json.Unmarshal(raw, &body) == nil {
+										ok, _ = body["ok"].(bool)
+									}
+								}
+								if ok {
+									replies++
+									r.Log(fmt.Sprintf("reply sent (total %d, generated file)", replies))
+								} else {
+									reply += "\n(I built the file but couldn't upload it.)"
+								}
+							}
 							if img := r.Chat.Ext.TakeImage(fmt.Sprint(cid)); len(img) > 0 {
 								ok := false
 								if ps, okp := r.T.(PhotoSender); okp {
@@ -809,4 +831,56 @@ type album struct {
 	n           int // pictures seen (more than 4 is refused)
 	caption     string
 	first, last time.Time
+}
+
+// docMessage reads a private-chat document that is not a picture.
+func docMessage(u map[string]any) (cid int64, fileID string, size int, name string, ok bool) {
+	m, _ := u["message"].(map[string]any)
+	chat, _ := m["chat"].(map[string]any)
+	if chat == nil || chat["type"] != "private" {
+		return
+	}
+	idf, isNum := chat["id"].(float64)
+	if !isNum || idf != math.Trunc(idf) {
+		return
+	}
+	d, _ := m["document"].(map[string]any)
+	if d == nil {
+		return
+	}
+	if mt, _ := d["mime_type"].(string); mt == "image/jpeg" || mt == "image/png" {
+		return
+	}
+	fileID, _ = d["file_id"].(string)
+	name, _ = d["file_name"].(string)
+	sz, _ := d["file_size"].(float64)
+	if fileID == "" {
+		return
+	}
+	return int64(idf), fileID, int(sz), name, true
+}
+
+// handleDoc reads an uploaded file into a bounded local report. Nothing is stored, unpacked to disk, run or sent on.
+func (r *Runner) handleDoc(cid int64, fileID string, size int, name string) string {
+	fg, ok := r.T.(FileGetter)
+	if !ok {
+		return "File reading isn't available on this connection."
+	}
+	if size > maxUpload {
+		return "That file is too big for me to read (limit 5 MB)."
+	}
+	res, err := call(r.T, r.API, r.Token, "getFile", url.Values{"file_id": {fileID}}, 20)
+	if err != nil {
+		return "I couldn't fetch that file from Telegram. Try sending it again."
+	}
+	result, _ := res["result"].(map[string]any)
+	fp, _ := result["file_path"].(string)
+	if fp == "" {
+		return "I couldn't fetch that file from Telegram. Try sending it again."
+	}
+	data, err := fg.GetFile(r.API, r.Token, fp, maxUpload, 60)
+	if err != nil {
+		return "I couldn't download that file. Try again."
+	}
+	return DescribeUpload(name, data)
 }

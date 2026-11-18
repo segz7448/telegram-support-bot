@@ -105,3 +105,51 @@ type PhotoSender interface {
 type MarkupPhotoSender interface {
 	PostPhotoMarkup(api, token, chatID, caption, markup string, png []byte, dir string, timeoutSec int) ([]byte, error)
 }
+
+// DocSender sends a file with sendDocument.
+type DocSender interface {
+	PostDocument(api, token, chatID, caption, name string, data []byte, dir string, timeoutSec int) ([]byte, error)
+}
+
+// PostDocument uploads a file with sendDocument via curl multipart. The URL (with the token) goes through curl's stdin
+// config, never argv. The bytes go through a 0600 temp file that is removed right after. The name is made safe first.
+func (c CurlTransport) PostDocument(api, token, chatID, caption, name string, data []byte, dir string, timeoutSec int) ([]byte, error) {
+	curl, err := resolveCurl(c.Curl)
+	if err != nil {
+		return nil, &APIError{Msg: err.Error()}
+	}
+	name = safeBase(name, "file")
+	f, err := os.CreateTemp(dir, "doc-*")
+	if err != nil {
+		return nil, &APIError{Msg: "cannot write temp file"}
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return nil, &APIError{Msg: "cannot write temp file"}
+	}
+	f.Close()
+	_ = os.Chmod(tmp, 0o600)
+	abs, _ := filepath.Abs(tmp)
+	var cfg bytes.Buffer
+	fmt.Fprintf(&cfg, "url = \"%s\"\n", cfgEscape(api+"/bot"+token+"/sendDocument"))
+	fmt.Fprintf(&cfg, "form = \"chat_id=%s\"\n", cfgEscape(chatID))
+	if caption != "" {
+		fmt.Fprintf(&cfg, "form-string = \"caption=%s\"\n", cfgEscape(caption))
+	}
+	fmt.Fprintf(&cfg, "form = \"document=@%s;filename=%s\"\n", cfgEscape(abs), cfgEscape(name))
+	args := []string{"-q", "-sS", "--connect-timeout", "15", "--max-time", fmt.Sprint(timeoutSec)}
+	if strings.HasPrefix(api, "https://") {
+		args = append(args, "--proto", "=https", "--proto-redir", "=https")
+	}
+	args = append(args, "-K", "-")
+	cmd := curlCommand(curl, args...)
+	cmd.Stdin = &cfg
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return nil, &APIError{Msg: redact("curl failed: "+strings.TrimSpace(errb.String()), token)}
+	}
+	return out.Bytes(), nil
+}
