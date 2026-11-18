@@ -489,3 +489,31 @@ func TestMediaBackgroundUploadFailureReportedOnce(t *testing.T) {
 		t.Fatal("unexpected auto-retry stash")
 	}
 }
+
+func TestMediaBlankSeparatorFromPhoneResponse(t *testing.T) {
+	l := mediaTestLink("s1")
+	s := strings.Replace(splitMedia(l), "\n", "\n\n", 1)
+	got, why := mediaLink(s, "s1")
+	if got != l || why != "" {
+		t.Fatal("harmless blank separator rejected", why)
+	}
+	if got, _ := mediaLink(strings.Replace(s, "\n\n", "\nextra-prose\n", 1), "s1"); got != "" {
+		t.Fatal("prose accepted")
+	}
+	mp := &mockPoster{replies: []string{mediaSSE(s, "complete", "s1")}}
+	w := newWajo(t, mp)
+	w.Media = true
+	w.Images = true
+	w.Get = func(u string, n int) ([]byte, error) {
+		if u != l {
+			t.Fatal("URL altered")
+		}
+		return mediaPNG(), nil
+	}
+	d := t.TempDir()
+	g := &extGate{A: w, Owner: "42", PendingFile: filepath.Join(d, "pending.json"), Wait: time.Second}
+	g.savePending("s1", stMediaImage, "")
+	if !runMediaHandler(g, d) || len(mp.calls) != 1 || !strings.Contains(mp.calls[0], "get_agent_reply") {
+		t.Fatal("existing completed result not collected read-only")
+	}
+}

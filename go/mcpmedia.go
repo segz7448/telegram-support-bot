@@ -227,7 +227,13 @@ func mediaOutputText(text string) (string, string) {
 	if len(text) > 12<<20 {
 		return "", "too_large"
 	}
-	lines := strings.Split(strings.TrimSpace(text), "\n")
+	var lines []string
+	for _, ln := range strings.Split(strings.TrimSpace(text), "\n") {
+		if strings.TrimSpace(ln) == "" {
+			continue
+		}
+		lines = append(lines, ln)
+	}
 	if len(lines) != 2 || len(lines[0]) > 600 || len(lines[0]) == 0 || len(lines[1]) == 0 {
 		return "", "bad_lines"
 	}
