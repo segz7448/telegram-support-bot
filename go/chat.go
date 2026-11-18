@@ -267,6 +267,7 @@ type Chat struct {
 	Notes  *Notes        // per-chat notes and tasks with tags (nil = off)
 	Admin  *Admin        // owner status/export and per-chat rate limit (nil = off)
 	Ext    *extGate      // owner-only outside assistant (nil = off)
+	Desk   *fileDesk     // local file requests on the last upload and on text in the message (nil = off)
 }
 
 func NewChat(s, w Searcher, pf PageFetcher, res *Resolver, log func(string)) *Chat {
@@ -709,6 +710,11 @@ func (c *Chat) Reply(chat, text string) string {
 	text = strings.TrimSpace(text)
 	if c.Admin != nil {
 		if r, ok := c.Admin.Handle(chat, text); ok {
+			return r
+		}
+	}
+	if c.Desk != nil {
+		if r, ok := c.Desk.Handle(chat, text); ok {
 			return r
 		}
 	}

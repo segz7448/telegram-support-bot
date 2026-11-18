@@ -740,12 +740,23 @@ func (r *Runner) Run() error {
 					}
 					if reply == "" && !sent {
 						reply = r.reply(text, fmt.Sprint(cid))
-						if r.Chat != nil && r.Chat.Ext != nil {
-							if f := r.Chat.Ext.TakeFile(fmt.Sprint(cid)); f != nil {
+						if r.Chat != nil {
+							var f *OutFile
+							if r.Chat.Ext != nil {
+								f = r.Chat.Ext.TakeFile(fmt.Sprint(cid))
+							}
+							if f == nil && r.Chat.Desk != nil {
+								f = r.Chat.Desk.TakeFile(fmt.Sprint(cid))
+							}
+							if f != nil {
+								capt := f.Caption
+								if capt == "" {
+									capt = "Generated file (unchecked, not run)"
+								}
 								ok := false
 								if ds, okd := r.T.(DocSender); okd {
 									call(r.T, r.API, r.Token, "sendChatAction", url.Values{"chat_id": {fmt.Sprint(cid)}, "action": {"upload_document"}}, 5)
-									raw, derr := ds.PostDocument(r.API, r.Token, fmt.Sprint(cid), "Generated file (unchecked, not run)", f.Name, f.Data, filepath.Dir(r.StatePath), 90)
+									raw, derr := ds.PostDocument(r.API, r.Token, fmt.Sprint(cid), capt, f.Name, f.Data, filepath.Dir(r.StatePath), 90)
 									var body map[string]any
 									if derr == nil && json.Unmarshal(raw, &body) == nil {
 										ok, _ = body["ok"].(bool)
@@ -758,7 +769,11 @@ func (r *Runner) Run() error {
 									reply += "\n(I built the file but couldn't upload it.)"
 								}
 							}
-							if img := r.Chat.Ext.TakeImage(fmt.Sprint(cid)); len(img) > 0 {
+							var img []byte
+							if r.Chat.Ext != nil {
+								img = r.Chat.Ext.TakeImage(fmt.Sprint(cid))
+							}
+							if len(img) > 0 {
 								ok := false
 								if ps, okp := r.T.(PhotoSender); okp {
 									raw, perr := ps.PostPhoto(r.API, r.Token, fmt.Sprint(cid), "Generated picture (unchecked)", img, filepath.Dir(r.StatePath), 60)
@@ -881,6 +896,12 @@ func (r *Runner) handleDoc(cid int64, fileID string, size int, name string) stri
 	data, err := fg.GetFile(r.API, r.Token, fp, maxUpload, 60)
 	if err != nil {
 		return "I couldn't download that file. Try again."
+	}
+	if r.Chat != nil && r.Chat.Desk != nil {
+		if t := uploadText(name, data); t != "" {
+			r.Chat.Desk.Remember(fmt.Sprint(cid), clip(safeBase(name, "file"), 50), t)
+			return DescribeUpload(name, data) + "\nI keep the text of this file in memory for an hour. You can say: show more, find \"word\" in it, how many words, replace \"a\" with \"b\" in it, convert it to pdf (or docx, txt). I make a changed copy and never touch the original."
+		}
 	}
 	return DescribeUpload(name, data)
 }

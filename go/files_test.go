@@ -163,7 +163,7 @@ func TestDescribeUpload(t *testing.T) {
 	if r := DescribeUpload("e.zip", buf.Bytes()); !strings.Contains(r, "Warning: 2 entries") {
 		t.Error(r)
 	}
-	if r := DescribeUpload("x.pdf", []byte("%PDF-1.4 ...")); !strings.Contains(r, "can't read PDF") {
+	if r := DescribeUpload("x.pdf", []byte("%PDF-1.4 ...")); !strings.Contains(r, "couldn't read text") {
 		t.Error(r)
 	}
 	if r := DescribeUpload("x.bin", []byte{0, 1, 2, 3, 0xff}); !strings.Contains(r, "can't read that kind") {

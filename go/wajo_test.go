@@ -355,3 +355,22 @@ func TestWajoImagePendingResumesAtSavedStage(t *testing.T) {
 		t.Fatal("resume at wait1 sent a new ask")
 	}
 }
+
+func TestLinkCandidatesRestore(t *testing.T) {
+	l := imgLink()
+	noSH := strings.Replace(l, "&X-Goog-SignedHeaders=host", "", 1)
+	if noSH == l {
+		t.Skip("fixture has no SignedHeaders to remove")
+	}
+	got, why := linkFromLines(linkLines(noSH))
+	if got != noSH {
+		t.Fatalf("link without SignedHeaders should be accepted for restoration: %s", why)
+	}
+	c := linkCandidates(got)
+	if len(c) != 2 || !strings.HasSuffix(c[0], "&X-Goog-SignedHeaders=host&response-content-type=image%2Fpng") || !strings.HasSuffix(c[1], "&X-Goog-SignedHeaders=host") || !strings.HasPrefix(c[0], noSH) {
+		t.Fatalf("bad candidates %v", c)
+	}
+	if c := linkCandidates(l); len(c) != 1 || c[0] != l {
+		t.Fatal("a complete link must be tried as is")
+	}
+}

@@ -352,9 +352,16 @@ func (w *WajoFo) resume(conv, stage, part1 string, cur *rpcResp, dl time.Time) (
 		if link == "" {
 			return ExtReply{Text: imgFail}, nil
 		}
-		b, err := w.Get(link, 8<<20)
+		var b []byte
+		var err error
+		for i, cand := range linkCandidates(link) {
+			b, err = w.Get(cand, 8<<20)
+			w.tr("stage=download try=%d restored_params=%v err=%v", i+1, cand != link, err)
+			if err == nil {
+				break
+			}
+		}
 		if err != nil {
-			w.tr("stage=download failed: %v", err)
 			return ExtReply{Text: imgFail}, nil
 		}
 		magic := len(b) >= 16 && (bytes.HasPrefix(b, []byte("\x89PNG")) || bytes.HasPrefix(b, []byte{0xFF, 0xD8, 0xFF}))
@@ -413,7 +420,7 @@ func linkFromLines(s string) (string, string) {
 		return "", "bad_host_or_parse"
 	}
 	q := u.Query()
-	for _, k := range []string{"X-Goog-Algorithm", "X-Goog-Credential", "X-Goog-Date", "X-Goog-Expires", "X-Goog-SignedHeaders", "X-Goog-Signature"} {
+	for _, k := range []string{"X-Goog-Algorithm", "X-Goog-Credential", "X-Goog-Date", "X-Goog-Expires", "X-Goog-Signature"} {
 		if q.Get(k) == "" {
 			return "", "missing_" + k
 		}
@@ -422,6 +429,22 @@ func linkFromLines(s string) (string, string) {
 		return "", fmt.Sprintf("sig_not_512_at_end(%d)", sigHexLen(link))
 	}
 	return link, ""
+}
+
+// linkCandidates lists the links to try, in order. The service has been seen to end its link right after the
+// signature, leaving out the two parameters that real links from the same service carry after it
+// (X-Goog-SignedHeaders=host and response-content-type=image/png). When SignedHeaders is missing, the first candidate puts
+// both back and the second puts back only SignedHeaders. Each is one plain GET of a short-lived read link; the
+// picture is never regenerated. A link that already has SignedHeaders is tried as it is.
+func linkCandidates(link string) []string {
+	if strings.Contains(link, "X-Goog-SignedHeaders=") {
+		return []string{link}
+	}
+	c := []string{link + "&X-Goog-SignedHeaders=host"}
+	if !strings.Contains(link, "response-content-type=") {
+		c = []string{link + "&X-Goog-SignedHeaders=host&response-content-type=image%2Fpng", c[0]}
+	}
+	return c
 }
 
 var reTokenOnlyFull = regexp.MustCompile(`^[A-Za-z0-9%_\-.~:/?#@!$&*+,;=]+$`)

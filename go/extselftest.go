@@ -33,8 +33,17 @@ func SelfTestExt(ct CurlTransport, step string) bool {
 	wf := &WajoFo{P: ct, URL: os.Getenv("TG_EXT_URL"), KeyFile: kf, Images: true, Get: fetchImageBytes(ct), TotalSec: 600, Trace: func(l string) { fmt.Println("TRACE", time.Now().Format("15:04:05"), l) }}
 	g := &extGate{A: wf, Owner: "selftest", PerDay: 5, PendingFile: pf, Wait: 30 * time.Second}
 	msg := "explain in a few lines what a mortgage is"
-	if step == "image" {
+	switch step {
+	case "image":
 		msg = "generate image of a golden dog on grass"
+	case "pdf":
+		msg = "make a pdf document about how compound interest works, with a short worked example"
+	case "docx":
+		msg = "make a word document about how to prepare for a job interview"
+	case "code":
+		msg = "write a python script that prints the first ten prime numbers"
+	case "zip":
+		msg = "build a small website project with an index page, a stylesheet and a script for a to-do list"
 	}
 	start := time.Now()
 	txt, img, ok := g.route("selftest", msg)
@@ -54,6 +63,22 @@ func SelfTestExt(ct CurlTransport, step string) bool {
 		return false
 	}
 	fmt.Printf("INFO finished in %s\n", time.Since(start).Round(time.Second))
+	if step == "pdf" || step == "docx" || step == "code" || step == "zip" {
+		f := g.TakeFile("selftest")
+		if f == nil {
+			fmt.Printf("FAIL no file built; bot reply: %s\n", clip(strings.Join(strings.Fields(txt), " "), 200))
+			return false
+		}
+		sum := sha256.Sum256(f.Data)
+		name := filepath.Join(out, "ext-selftest-"+f.Name)
+		if os.WriteFile(name, f.Data, 0o600) != nil {
+			fmt.Println("FAIL cannot save file")
+			return false
+		}
+		rep := DescribeUpload(f.Name, f.Data)
+		fmt.Printf("PASS file built from the service reply: %s, %d bytes, sha256 %x, saved %s\nREADBACK %s\n", f.Name, len(f.Data), sum, name, clip(strings.Join(strings.Fields(rep), " "), 400))
+		return true
+	}
 	if step != "image" {
 		p := strings.Join(strings.Fields(txt), " ")
 		if len(p) > 160 {

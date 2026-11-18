@@ -25,8 +25,9 @@ const (
 )
 
 type OutFile struct {
-	Name string
-	Data []byte
+	Caption string
+	Name    string
+	Data    []byte
 }
 
 type fileBlock struct {
@@ -205,7 +206,11 @@ func makeDocx(title, text string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func pdfEsc(s string) string {
+var winAnsiHigh = map[rune]byte{0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84, 0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87, 0x02C6: 0x88, 0x2030: 0x89, 0x0160: 0x8A, 0x2039: 0x8B, 0x0152: 0x8C, 0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92, 0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97, 0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A, 0x203A: 0x9B, 0x0153: 0x9C, 0x017E: 0x9E, 0x0178: 0x9F}
+
+// pdfEsc encodes one line for the standard Helvetica font with WinAnsiEncoding (ASCII, Latin-1 and the usual Windows
+// punctuation). Anything else is reported in bad instead of being turned into "?".
+func pdfEsc(s string) (out string, bad []rune) {
 	var b strings.Builder
 	for _, r := range s {
 		switch {
@@ -216,37 +221,42 @@ func pdfEsc(s string) string {
 			b.WriteRune(r)
 		case r == '\t':
 			b.WriteString("    ")
-		case r == '\u2018' || r == '\u2019':
-			b.WriteByte('\'')
-		case r == '\u201c' || r == '\u201d':
-			b.WriteByte('"')
-		case r == '\u2013' || r == '\u2014':
-			b.WriteByte('-')
-		case r == '\u2022':
-			b.WriteByte('*')
-		case r > 0x7f:
-			b.WriteByte('?')
+		case r == 0xA0:
+			b.WriteByte(' ')
+		case r >= 0xA1 && r <= 0xFF:
+			fmt.Fprintf(&b, "\\%03o", r)
+		case winAnsiHigh[r] != 0:
+			fmt.Fprintf(&b, "\\%03o", winAnsiHigh[r])
+		case r == 0x200B || r == 0xFEFF || r == 0xAD || r == '\r':
+		case r < 0x20 || r == 0x7f:
+		default:
+			bad = append(bad, r)
 		}
 	}
-	return b.String()
+	return b.String(), bad
 }
 
-// makePDF writes a plain multi-page PDF (Helvetica, 11 pt, wrapped at 90 columns, A4). Characters outside basic Latin
-// become "?", which is a stated limit of this simple writer.
+// makePDF writes a plain multi-page PDF (Helvetica, 11 pt, wrapped at 90 columns, A4). It covers ASCII, Latin-1
+// accents and common Windows punctuation. Text with other characters (CJK, Cyrillic, emoji, arrows) is refused with
+// a pdfCharsError instead of being written with "?" in place of them.
 func makePDF(title, text string) ([]byte, error) {
 	var lines []string
 	wrap := func(s string, w int) {
 		for _, ln := range strings.Split(s, "\n") {
 			ln = strings.TrimRight(strings.NewReplacer("**", "", "__", "", "# ", "", "## ", "", "### ", "").Replace(ln), " \t")
-			for len(ln) > w {
-				cut := strings.LastIndex(ln[:w], " ")
+			rs := []rune(ln)
+			for len(rs) > w {
+				cut := strings.LastIndex(string(rs[:w]), " ")
+				if cut >= 0 {
+					cut = len([]rune(string(rs[:w])[:cut]))
+				}
 				if cut < 20 {
 					cut = w
 				}
-				lines = append(lines, ln[:cut])
-				ln = strings.TrimLeft(ln[cut:], " ")
+				lines = append(lines, string(rs[:cut]))
+				rs = []rune(strings.TrimLeft(string(rs[cut:]), " "))
 			}
-			lines = append(lines, ln)
+			lines = append(lines, string(rs))
 		}
 	}
 	if title != "" {
@@ -269,6 +279,7 @@ func makePDF(title, text string) ([]byte, error) {
 	if len(pages) > 80 {
 		return nil, fmt.Errorf("too long for a PDF (over 80 pages)")
 	}
+	var badAll []rune
 	var buf bytes.Buffer
 	var offs []int
 	obj := func(s string) {
@@ -283,16 +294,21 @@ func makePDF(title, text string) ([]byte, error) {
 		kids = append(kids, fmt.Sprintf("%d 0 R", 4+i*2))
 	}
 	obj(fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), n))
-	obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+	obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
 	for i, pg := range pages {
 		obj(fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>", 5+i*2))
 		var c strings.Builder
 		c.WriteString("BT /F1 11 Tf 14 TL 50 800 Td\n")
 		for _, ln := range pg {
-			fmt.Fprintf(&c, "(%s) Tj T*\n", pdfEsc(ln))
+			e, bad := pdfEsc(ln)
+			badAll = append(badAll, bad...)
+			fmt.Fprintf(&c, "(%s) Tj T*\n", e)
 		}
 		c.WriteString("ET")
 		obj(fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", c.Len(), c.String()))
+	}
+	if len(badAll) > 0 {
+		return nil, &pdfCharsError{bad: badAll}
 	}
 	xref := buf.Len()
 	fmt.Fprintf(&buf, "xref\n0 %d\n0000000000 65535 f \n", len(offs)+1)
@@ -357,7 +373,10 @@ func DescribeUpload(name string, data []byte) string {
 	case len(data) > 4 && bytes.HasPrefix(data, []byte("PK\x03\x04")):
 		return describeZip(nm, data)
 	case bytes.HasPrefix(data, []byte("%PDF")):
-		return nm + ": a PDF. I can't read PDF text yet (no PDF reader is built in), so I did nothing with it. Send it as text, DOCX or paste the part you need."
+		if t, ok := pdfText(data); ok {
+			return fmt.Sprintf("%s: PDF, %d characters of text read locally (simple PDFs only). Start of the text (quoted, unchecked):\n%s", nm, len(t), clip(printable(t), 1200))
+		}
+		return nm + ": a PDF, but I couldn't read text from it (it may be a scan or use fonts I can't decode). I have no OCR or image reading, so I did nothing with it. Send it as text or DOCX, or paste the part you need."
 	case textExts[ext] || (utf8.Valid(data) && !bytes.Contains(data, []byte{0})):
 		s := string(data)
 		return fmt.Sprintf("%s: text file, %d bytes, %d lines. Start (quoted, unchecked):\n%s", nm, len(data), strings.Count(s, "\n")+1, clip(printable(s), 1200))
@@ -424,4 +443,18 @@ func describeZip(nm string, data []byte) string {
 		warn += "Warning: the archive expands far beyond its size, so it could be a zip bomb. I did not open any entry.\n"
 	}
 	return fmt.Sprintf("%s: ZIP with %d entries, %d bytes when unpacked. I only listed it. I never unpack or run anything.\n%s%s%s", nm, len(zr.File), total, warn, b.String(), more)
+}
+
+type pdfCharsError struct{ bad []rune }
+
+func (e *pdfCharsError) Error() string {
+	seen := map[rune]bool{}
+	var l []string
+	for _, r := range e.bad {
+		if !seen[r] && len(l) < 6 {
+			seen[r] = true
+			l = append(l, string(r))
+		}
+	}
+	return fmt.Sprintf("this PDF writer can't hold characters like %s (it covers English and Western European text). Ask for a DOCX or a text file instead, which keep every character", strings.Join(l, " "))
 }

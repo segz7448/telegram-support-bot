@@ -26,6 +26,16 @@ func main() {
 		fmt.Println("tgbot", Version)
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "--selftest-files" { // tokenless, local only: builds real files into a folder
+		out := os.TempDir()
+		if len(os.Args) > 2 {
+			out = os.Args[2]
+		}
+		if !SelfTestFiles(out) {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--selftest-state" { // tokenless, mocked transport, own temp folder only
 		if !SelfTestState(dir, func(s string) { fmt.Fprintln(os.Stderr, s) }) {
 			os.Exit(1)
@@ -47,7 +57,7 @@ func main() {
 		ct := CurlTransport{Curl: curlPath}
 		ok := false
 		switch {
-		case os.Args[2] == "text" || os.Args[2] == "image":
+		case os.Args[2] == "text" || os.Args[2] == "image" || os.Args[2] == "pdf" || os.Args[2] == "docx" || os.Args[2] == "code" || os.Args[2] == "zip":
 			ok = SelfTestExt(ct, os.Args[2])
 		case os.Args[2] == "inspect":
 			conv := ""
@@ -60,7 +70,7 @@ func main() {
 		case os.Args[2] == "fetch" && len(os.Args) > 3:
 			ok = SelfTestExtFetch(ct, os.Args[3])
 		default:
-			fmt.Println("usage: --selftest-ext text | image | inspect [conversationId] | link <conversationId> | fetch <link-file>")
+			fmt.Println("usage: --selftest-ext text | image | pdf | docx | code | zip | inspect [conversationId] | link <conversationId> | fetch <link-file>")
 		}
 		if !ok {
 			os.Exit(1)
@@ -205,6 +215,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "outside assistant: on (owner-only)")
 		}
 		tools.General = true
+		chat.Desk = newFileDesk()
 		fmt.Fprintln(os.Stderr, "general chat mode (no language model): search + page extraction; search key present:", srch != nil)
 	}
 	rateN := 10
