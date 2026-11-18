@@ -8,7 +8,7 @@ import (
 // ZAO BOT identity. Everything here describes only what this program really does: it never claims a language model,
 // computer use, phone calls, email or a history it does not have, and it never names its backend or providers.
 
-const zaoIntro = "I'm ZAO BOT, a chatbot with agent-style tools: I match what you say to things I can do, look things up, calculate, play games, edit photos and run reminders and scheduled messages once you set them. I'm not a language model and I can't reason the way a person does, so check anything important."
+const zaoIntro = "I'm ZAO BOT, a chatbot with agent-style tools: I match what you say to things I can do, look things up, calculate, play games, edit photos and run reminders and scheduled messages once you set them. Answers from searches are quoted with their sources, and I can be wrong, so check anything important."
 
 const zaoCan = "In this chat I can: search and quote sources with links, do maths and unit and currency conversions, dates and time zones, quote cards, posters and charts, QR codes, text tools, notes and reminders, chess, Connect Four, Reversi, draughts and Ludo, and simple edits to pictures you send (crop, rotate, black and white, captions and more, with a collage for 2-4 pictures). Some features only work when the owner has switched them on."
 
