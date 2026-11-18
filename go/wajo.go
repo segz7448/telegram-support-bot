@@ -11,8 +11,9 @@ import (
 	"time"
 )
 
-// WajoFo is the concrete ExternalAnswerer for the owner's personal outside assistant (JSON-RPC over HTTPS, tool
-// "ask_fo"). Contract notes are in deploy/wajo-contract.md. The API key is read from a file at call time and is never
+// WajoFo is the concrete client for the owner's existing outside assistant.
+// Text/file calls use ask_fo; opt-in media uses isolated MCP sessions.
+// The API key is read from a file at call time and is never
 // logged, printed, or put in command arguments (the poster sends headers through curl's stdin config).
 //
 // CONFINEMENT: the service offers no server-side switch that stops it from taking real-world actions, so nothing here
@@ -23,19 +24,25 @@ import (
 // approval. The wrapper instruction is a request to the service, not enforcement. The residual risk is that a
 // confused or manipulated service takes an action anyway before it answers.
 type WajoFo struct {
-	P        JSONPoster
-	URL      string
-	KeyFile  string
-	Images   bool // image return is off until the download path is verified end to end
-	Get      func(rawURL string, maxBytes int) ([]byte, error)
-	Sleep    func(time.Duration)
-	TotalSec int // overall wait; default 100
-	LastConv string
+	P            JSONPoster
+	URL          string
+	KeyFile      string
+	Images       bool // image return is off until the download path is verified end to end
+	Media        bool // opt-in MCP media route; legacy pending records still collect via their saved stage
+	MediaURL     string
+	MediaAgentID string // non-secret account agent identifier supplied by local config, never baked into public code
+	InputVision  bool   // private uploaded-image analysis requires its own opt-in
+	InputEdits   bool   // remote input editing requires its own opt-in; disabled after fidelity failure
+	Get          func(rawURL string, maxBytes int) ([]byte, error)
+	Sleep        func(time.Duration)
+	TotalSec     int // overall wait; default 100
+	LastConv     string
 	// Trace, if set, receives one short diagnostic line per step (stage, status, lengths, HTTP codes). Never URLs, keys or reply text.
 	Trace   func(string)
 	kindCur string
 	// Progress, if set, is told the conversation id and stage each time they change, so they can be saved.
-	Progress func(conv, stage, part1 string)
+	Progress        func(conv, stage, part1 string)
+	ProgressChecked func(conv, stage, part1 string) error
 }
 
 const wajoDefaultURL = "https://mcp.api.wajo.ai/fo"
@@ -51,6 +58,7 @@ type rpcResp struct {
 		StructuredContent struct {
 			Response       string `json:"response"`
 			Status         string `json:"status"`
+			SessionID      string `json:"sessionId"`
 			ConversationID string `json:"conversationId"`
 		} `json:"structuredContent"`
 		Content []struct {
@@ -212,6 +220,10 @@ func respText(res *rpcResp) string {
 }
 
 func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
+	if w.Media && (r.Image || len(r.InputImage) > 0) {
+		w.kindCur = ""
+		return w.askMedia(r)
+	}
 	dl := w.deadline()
 	w.kindCur = r.Kind
 	if r.Kind != "" {
@@ -378,7 +390,7 @@ func (w *WajoFo) resume(conv, stage, part1 string, cur *rpcResp, dl time.Time) (
 	return ExtReply{}, fmt.Errorf("unknown stage")
 }
 
-const imgFail = "The picture was made, but I couldn't fetch it. I won't make another one by myself."
+const imgFail = "I didn't receive a usable picture file. I won't make another one by myself."
 
 func sigHexLen(s string) int {
 	if m := reSig.FindStringSubmatch(s); m != nil {
@@ -459,6 +471,10 @@ func linkShape(link, why string) string {
 
 // Collect resumes a saved request by polling its conversation (nothing is re-asked at the stage it saved).
 func (w *WajoFo) Collect(p extPending) (ExtReply, error) {
+	if p.Stage == stMediaImage || p.Stage == stMediaVision || p.Stage == stMediaEdit {
+		w.kindCur = ""
+		return w.collectMedia(p.Conv, p.Stage, nil, w.deadline())
+	}
 	w.kindCur = p.Kind
 	w.tr("collect stage=%s", p.Stage)
 	return w.resume(p.Conv, p.Stage, p.Part1, nil, w.deadline())
@@ -480,12 +496,9 @@ func fetchImageBytes(ct CurlTransport) func(string, int) ([]byte, error) {
 		cmd.Stdin = &cfg
 		var out, eb bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &eb
+		// Curl stderr may contain signed URLs or fragments. Only the process status is safe to report.
 		if err := cmd.Run(); err != nil {
-			msg := strings.ReplaceAll(strings.TrimSpace(eb.String()), rawURL, "<link>")
-			if len(msg) > 120 {
-				msg = msg[:120]
-			}
-			return nil, fmt.Errorf("curl error: %v %s", err, msg)
+			return nil, fmt.Errorf("curl error: %v", err)
 		}
 		b := out.Bytes()
 		i := bytes.LastIndexByte(b, '\n')
@@ -505,7 +518,8 @@ func fetchImageBytes(ct CurlTransport) func(string, int) ([]byte, error) {
 }
 
 // SetProgress lets the gate save stage changes as they happen.
-func (w *WajoFo) SetProgress(f func(conv, stage, part1 string)) { w.Progress = f }
+func (w *WajoFo) SetProgress(f func(conv, stage, part1 string))              { w.Progress = f }
+func (w *WajoFo) SetCheckedProgress(f func(conv, stage, part1 string) error) { w.ProgressChecked = f }
 
 // rawCall returns the generic JSON result object of a tool call (used by the read-only diagnostics).
 func (w *WajoFo) rawCall(tool string, args map[string]any) (map[string]any, error) {

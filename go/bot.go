@@ -237,11 +237,23 @@ func (r *Runner) handlePhoto(cid int64, fileID string, size int, caption string)
 	}
 	ops := parseOps(caption)
 	wantOCR := len(ops) == 0 && reOCR.MatchString(caption)
-	if len(ops) == 0 && !wantOCR {
+	wantRemote := len(ops) == 0 && !wantOCR && r.Chat != nil && r.Chat.Ext != nil && r.Chat.Ext.allowed(fmt.Sprint(cid)) && (reMediaEdit.MatchString(caption) || reImgAsk.MatchString(caption))
+	if wantRemote {
+		w, ok := r.Chat.Ext.A.(*WajoFo)
+		wantRemote = ok && w.Media && ((reMediaEdit.MatchString(caption) && w.InputEdits) || (reImgAsk.MatchString(caption) && w.InputVision))
+	}
+	if len(ops) == 0 && !wantOCR && !wantRemote {
 		if strings.TrimSpace(caption) != "" {
 			return photoNoVision + photoHelp
 		}
-		return photoHelp
+		return photoHelp + func() string {
+			if r.Chat != nil && r.Chat.Ext != nil && r.Chat.Ext.allowed(fmt.Sprint(cid)) {
+				if w, ok := r.Chat.Ext.A.(*WajoFo); ok && w.Media && (w.InputVision || w.InputEdits) {
+					return " For outside analysis, attach the picture with a caption such as describe this picture. For a remote edit, say edit this picture followed by the change. Only a small preview (up to 160 pixels) is passed on, not the full-resolution original."
+				}
+			}
+			return ""
+		}()
 	}
 	if wantOCR && ocrPath() == "" {
 		return ocrMissing + photoHelp
@@ -266,6 +278,20 @@ func (r *Runner) handlePhoto(cid int64, fileID string, size int, caption string)
 	data, err := fg.GetFile(r.API, r.Token, fp, maxImageBytes, 60)
 	if err != nil {
 		return "I couldn't download that picture. Try again."
+	}
+	if wantRemote {
+		msg, handled := r.Chat.Ext.mediaWork(fmt.Sprint(cid), caption, data)
+		if handled {
+			if img := r.Chat.Ext.TakeImage(fmt.Sprint(cid)); len(img) > 0 {
+				raw, e := ps.PostPhoto(r.API, r.Token, fmt.Sprint(cid), "Outside picture result (unchecked)", img, filepath.Dir(r.StatePath), 90)
+				var v map[string]any
+				if e != nil || json.Unmarshal(raw, &v) != nil || v["ok"] != true {
+					return "The picture result came back, but I couldn't upload it to Telegram. I won't repeat the request."
+				}
+			}
+			return msg
+		}
+		return photoNoVision + photoHelp
 	}
 	if wantOCR {
 		txt, oerr := OCRImage(data, filepath.Dir(r.StatePath))

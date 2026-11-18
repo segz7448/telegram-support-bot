@@ -53,6 +53,12 @@ func main() {
 	}
 	curlPath := os.Getenv("TG_CURL")
 	tools := NewTools(CurlTransport{Curl: curlPath}, func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
+	if len(os.Args) > 2 && os.Args[1] == "--selftest-media" {
+		if !SelfTestMedia(CurlTransport{Curl: os.Getenv("TG_CURL")}, os.Args[2]) {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 2 && os.Args[1] == "--selftest-ext" { // live service, no Telegram
 		ct := CurlTransport{Curl: curlPath}
 		ok := false
@@ -201,16 +207,19 @@ func main() {
 			tools.ErAPI = "https://open.er-api.com/v6/latest/USD"
 		}
 		// Outside assistant: OFF unless an explicit switch, a verified owner id and a key file are all present.
-		// Images stay off (no downloader is wired) until the download path is verified.
+		// Media has independent opt-in switches; generation never enables private-picture input.
 		if os.Getenv("TG_EXT_ENABLE") == "1" && strings.TrimSpace(os.Getenv("TG_OWNER_ID")) != "" && os.Getenv("TG_EXT_KEY_FILE") != "" {
 			per := 30 // the bot's own protection, not a service entitlement
 			if v, err := strconv.Atoi(os.Getenv("TG_EXT_PER_DAY")); err == nil && v > 0 {
 				per = v
 			}
-			wf := &WajoFo{P: CurlTransport{Curl: curl}, URL: os.Getenv("TG_EXT_URL"), KeyFile: os.Getenv("TG_EXT_KEY_FILE"), TotalSec: 600, Trace: func(l string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), "ext:", l) }}
-			if os.Getenv("TG_EXT_IMAGES") == "1" { // pictures need their own switch
+			wf := &WajoFo{P: CurlTransport{Curl: curl}, URL: os.Getenv("TG_EXT_URL"), MediaURL: os.Getenv("TG_EXT_MEDIA_URL"), MediaAgentID: os.Getenv("TG_EXT_MEDIA_AGENT_ID"), KeyFile: os.Getenv("TG_EXT_KEY_FILE"), TotalSec: 600, Trace: func(l string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), "ext:", l) }}
+			if os.Getenv("TG_EXT_IMAGES") == "1" {
 				wf.Images, wf.Get = true, fetchImageBytes(CurlTransport{Curl: curl})
 			}
+			wf.InputVision = os.Getenv("TG_EXT_VISION") == "1"
+			wf.InputEdits = wf.Images && os.Getenv("TG_EXT_IMAGE_EDITS") == "1"
+			wf.Media = wf.Images || wf.InputVision || wf.InputEdits
 			chat.Ext = &extGate{A: wf, Owner: strings.TrimSpace(os.Getenv("TG_OWNER_ID")), PerDay: per, Now: time.Now, PendingFile: os.Getenv("TG_EXT_PENDING_FILE")}
 			fmt.Fprintln(os.Stderr, "outside assistant: on (owner-only)")
 		}

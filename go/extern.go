@@ -27,10 +27,11 @@ import (
 //   - a per-day cap bounds use.
 
 type ExtRequest struct {
-	Text  string
-	Image bool   // the owner asked for a picture
-	Kind  string // "doc" or "code": a file is wanted (built locally from the reply)
-	Raw   string // fully composed internal prompt (uploaded-file work); never built from raw user text
+	InputImage []byte // owner-uploaded bytes, memory only, never a Telegram download URL
+	Text       string
+	Image      bool   // the owner asked for a picture
+	Kind       string // "doc" or "code": a file is wanted (built locally from the reply)
+	Raw        string // fully composed internal prompt (uploaded-file work); never built from raw user text
 }
 
 type ExtReply struct {
@@ -297,6 +298,18 @@ func (g *extGate) beginPending(conv, stage, part1 string) { g.savePending(conv, 
 
 // setProgress wires the client so every stage change is saved as it happens.
 func (g *extGate) setProgress(f func(conv, stage, part1 string)) {
+	if wf, ok := g.A.(interface {
+		SetCheckedProgress(func(string, string, string) error)
+	}); ok {
+		wf.SetCheckedProgress(func(c, s, p string) error {
+			f(c, s, p)
+			saved := g.loadPending()
+			if saved == nil || saved.Conv != c || saved.Stage != s {
+				return fmt.Errorf("pending state unavailable")
+			}
+			return nil
+		})
+	}
 	if wf, ok := g.A.(interface {
 		SetProgress(func(conv, stage, part1 string))
 	}); ok {

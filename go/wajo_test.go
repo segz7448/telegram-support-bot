@@ -34,7 +34,7 @@ func jsonStr(s string) string { b, _ := json.Marshal(s); return string(b) }
 func newWajo(t *testing.T, m *mockPoster) *WajoFo {
 	kf := filepath.Join(t.TempDir(), "k")
 	os.WriteFile(kf, []byte("wak_TESTKEY\n"), 0o600)
-	return &WajoFo{P: m, KeyFile: kf, Sleep: func(time.Duration) {}}
+	return &WajoFo{P: m, KeyFile: kf, Sleep: func(time.Duration) {}, MediaAgentID: "test-agent", InputVision: true, InputEdits: true}
 }
 
 func TestWajoTextRoundTripAndWrapping(t *testing.T) {
