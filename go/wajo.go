@@ -284,8 +284,9 @@ func (w *WajoFo) Ask(r ExtRequest) (ExtReply, error) {
 	return w.resume(conv, stText, "", res, dl)
 }
 
-const wajoFirstAsk = "Make a fresh signed download link for the image you already made. Do not make a new image. Reply with ONLY the first %d characters of that link, with no other text."
-const wajoRestAsk = "Using that same fresh link, reply with ONLY the characters that come after its first %d characters, with no other text. Do not make a new image."
+// One follow-up asks for the whole fresh link, cut into lines at "?" and "&". The service cannot count characters, so
+// the cut points are structural (every piece is a short token) and nothing is joined across two separate answers.
+const wajoLinkAsk = "Make a fresh signed download link for the image you already made. Do not make a new image. Reply with ONLY that link, cut into lines: put a line break before every '&' and after the '?', one piece per line, in order, with the '&' kept at the start of each later piece. No other text, no list marks, no code block."
 
 var reTokenOnly = regexp.MustCompile(`[A-Za-z0-9%_\-.~:/?#@!$&*+,;=]+`)
 
@@ -329,7 +330,7 @@ func (w *WajoFo) resume(conv, stage, part1 string, cur *rpcResp, dl time.Time) (
 			return ExtReply{Text: "The picture was made but I can't fetch it here."}, nil
 		}
 		w.prog(conv, stWait1, "")
-		res, err := w.call("ask_fo", map[string]any{"conversationId": conv, "message": fmt.Sprintf(wajoFirstAsk, firstPartChars)}, 130)
+		res, err := w.call("ask_fo", map[string]any{"conversationId": conv, "message": wajoLinkAsk}, 130)
 		if err != nil {
 			return ExtReply{}, err
 		}
@@ -346,32 +347,8 @@ func (w *WajoFo) resume(conv, stage, part1 string, cur *rpcResp, dl time.Time) (
 		if !ok {
 			return ExtReply{Text: extActionNote}, nil
 		}
-		p1 := reGCSURL.FindString(strings.NewReplacer("`", " ").Replace(t))
-		w.tr("stage=wait1 part1_len=%d resp_len=%d https_gcs_prefix=%v", len(p1), len(t), strings.HasPrefix(p1, "https://storage.googleapis.com/"))
-		if !strings.HasPrefix(p1, "https://storage.googleapis.com/") || len(p1) < 100 {
-			return ExtReply{Text: imgFail}, nil
-		}
-		w.prog(conv, stWait2, p1)
-		res, err := w.call("ask_fo", map[string]any{"conversationId": conv, "message": fmt.Sprintf(wajoRestAsk, len(p1))}, 130)
-		if err != nil {
-			return ExtReply{}, err
-		}
-		res, done, err := w.settle(res, conv, dl)
-		if err != nil {
-			return ExtReply{}, err
-		}
-		if !done {
-			return ExtReply{Pending: conv, Stage: stWait2, Part1: p1}, nil
-		}
-		return w.resume(conv, stWait2, p1, res, dl)
-	case stWait2:
-		t, ok := w.txtOut(cur)
-		if !ok {
-			return ExtReply{Text: extActionNote}, nil
-		}
-		p2 := longestToken(strings.NewReplacer("`", " ").Replace(t))
-		link := joinLink(part1, p2)
-		w.tr("stage=wait2 part1_len=%d part2_len=%d joined_ok=%v joined_len=%d sig_hex=%d", len(part1), len(p2), link != "", len(link), sigHexLen(part1+p2))
+		link, why := linkFromLines(t)
+		w.tr("stage=wait1 resp_len=%d lines=%d link_ok=%v link_len=%d sig_hex=%d %s", len(t), strings.Count(strings.TrimSpace(t), "\n")+1, link != "", len(link), sigHexLen(link), linkShape(link, why))
 		if link == "" {
 			return ExtReply{Text: imgFail}, nil
 		}
@@ -401,27 +378,69 @@ func sigHexLen(s string) int {
 
 var reSig = regexp.MustCompile(`X-Goog-Signature=([0-9a-fA-F]+)$`)
 
-// joinLink joins the two parts (dropping any overlap) and accepts the result only if it is a storage.googleapis.com
-// https link whose X-Goog-Signature is the full 512 hex characters.
-func joinLink(p1, p2 string) string {
-	if p1 == "" || p2 == "" {
+var reQueryKey = regexp.MustCompile(`[?&](X-Goog-[A-Za-z]+)=`)
+
+// linkFromLines joins the lines of a link that was cut at '?' and '&'. It accepts only a storage.googleapis.com https
+// link with the signing parameters present and a 512-hex signature; otherwise it returns "" and a short reason.
+func linkFromLines(s string) (string, string) {
+	var parts []string
+	for _, ln := range strings.Split(strings.NewReplacer("`", "", "\r", "").Replace(s), "\n") {
+		ln = strings.TrimSpace(ln)
+		ln = strings.TrimLeft(ln, "-*>• ")
+		if ln == "" {
+			continue
+		}
+		if len(parts) == 0 {
+			i := strings.Index(ln, "https://storage.googleapis.com/")
+			if i < 0 {
+				continue
+			}
+			ln = ln[i:]
+		} else if !strings.HasPrefix(ln, "&") && !strings.HasPrefix(ln, "?") && !reTokenOnlyFull.MatchString(ln) {
+			break
+		}
+		if i := strings.IndexAny(ln, " \t"); i >= 0 {
+			ln = ln[:i]
+		}
+		parts = append(parts, ln)
+	}
+	if len(parts) == 0 {
+		return "", "no_link_line"
+	}
+	link := strings.Join(parts, "")
+	u, err := url.Parse(link)
+	if err != nil || u.Scheme != "https" || u.Host != "storage.googleapis.com" {
+		return "", "bad_host_or_parse"
+	}
+	q := u.Query()
+	for _, k := range []string{"X-Goog-Algorithm", "X-Goog-Credential", "X-Goog-Date", "X-Goog-Expires", "X-Goog-SignedHeaders", "X-Goog-Signature"} {
+		if q.Get(k) == "" {
+			return "", "missing_" + k
+		}
+	}
+	if n := sigHexLen(link); n != 512 || !strings.HasSuffix(link, q.Get("X-Goog-Signature")) {
+		return "", fmt.Sprintf("sig_not_512_at_end(%d)", sigHexLen(link))
+	}
+	return link, ""
+}
+
+var reTokenOnlyFull = regexp.MustCompile(`^[A-Za-z0-9%_\-.~:/?#@!$&*+,;=]+$`)
+
+// linkShape describes a link without revealing it: parameter names, signing date and lifetime.
+func linkShape(link, why string) string {
+	if link == "" {
+		return "reason=" + why
+	}
+	u, err := url.Parse(link)
+	if err != nil {
 		return ""
 	}
-	// no overlap first (the verified case); overlap is tried only if that does not give a valid link
-	for k := 0; k <= min(len(p1), len(p2), 64); k++ {
-		if k > 0 && !strings.HasSuffix(p1, p2[:k]) {
-			continue
-		}
-		link := p1 + p2[k:]
-		u, err := url.Parse(link)
-		if err != nil || u.Scheme != "https" || u.Host != "storage.googleapis.com" {
-			continue
-		}
-		if m := reSig.FindStringSubmatch(link); m != nil && len(m[1]) == 512 {
-			return link
-		}
+	var keys []string
+	for _, m := range reQueryKey.FindAllStringSubmatch(link, -1) {
+		keys = append(keys, m[1])
 	}
-	return ""
+	q := u.Query()
+	return fmt.Sprintf("path_len=%d params=%s date=%s expires=%s", len(u.Path), strings.Join(keys, ","), q.Get("X-Goog-Date"), q.Get("X-Goog-Expires"))
 }
 
 // Collect resumes a saved request by polling its conversation (nothing is re-asked at the stage it saved).
@@ -461,7 +480,11 @@ func fetchImageBytes(ct CurlTransport) func(string, int) ([]byte, error) {
 		}
 		code := strings.TrimSpace(string(b[i+1:]))
 		if code != "200" {
-			return nil, fmt.Errorf("http %s, %d bytes", code, i)
+			ec := ""
+			if m := regexp.MustCompile(`<Code>([A-Za-z]{1,40})</Code>`).FindSubmatch(b[:i]); m != nil {
+				ec = " code=" + string(m[1])
+			}
+			return nil, fmt.Errorf("http %s, %d bytes%s", code, i, ec)
 		}
 		return b[:i], nil
 	}
