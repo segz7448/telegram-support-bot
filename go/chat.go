@@ -277,6 +277,9 @@ func (c *Chat) logf(s string) {
 }
 
 func (c *Chat) state(chat string) *convo {
+	if c.hist == nil {
+		c.hist = map[string]*convo{}
+	}
 	if s, ok := c.hist[chat]; ok {
 		return s
 	}
