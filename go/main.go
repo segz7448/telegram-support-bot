@@ -166,6 +166,16 @@ func main() {
 		if os.Getenv("TG_FX_FALLBACK") != "0" { // on by default; TG_FX_FALLBACK=0 turns it off
 			tools.ErAPI = "https://open.er-api.com/v6/latest/USD"
 		}
+		// Outside assistant: OFF unless an explicit switch, a verified owner id and a key file are all present.
+		// Images stay off (no downloader is wired) until the download path is verified.
+		if os.Getenv("TG_EXT_ENABLE") == "1" && strings.TrimSpace(os.Getenv("TG_OWNER_ID")) != "" && os.Getenv("TG_EXT_KEY_FILE") != "" {
+			per := 30 // the bot's own protection, not a service entitlement
+			if v, err := strconv.Atoi(os.Getenv("TG_EXT_PER_DAY")); err == nil && v > 0 {
+				per = v
+			}
+			chat.Ext = &extGate{A: &WajoFo{P: CurlTransport{Curl: curl}, URL: os.Getenv("TG_EXT_URL"), KeyFile: os.Getenv("TG_EXT_KEY_FILE")}, Owner: strings.TrimSpace(os.Getenv("TG_OWNER_ID")), PerDay: per, Now: time.Now}
+			fmt.Fprintln(os.Stderr, "outside assistant: on (owner-only)")
+		}
 		tools.General = true
 		fmt.Fprintln(os.Stderr, "general chat mode (no language model): search + page extraction; search key present:", srch != nil)
 	}
