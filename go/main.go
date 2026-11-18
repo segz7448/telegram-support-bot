@@ -53,6 +53,12 @@ func main() {
 	}
 	curlPath := os.Getenv("TG_CURL")
 	tools := NewTools(CurlTransport{Curl: curlPath}, func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) })
+	if len(os.Args) > 1 && os.Args[1] == "--selftest-tts-handler" {
+		if !SelfTestTTSHandler() {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--selftest-voice-handler" {
 		if !SelfTestVoiceHandler(CurlTransport{Curl: curlPath}) {
 			os.Exit(1)
@@ -261,6 +267,11 @@ func main() {
 		StatePath: statePath, DeadPath: deadPath, QuiesceFile: quiescePath(),
 		Sleep: time.Sleep, Log: func(s string) { fmt.Fprintln(os.Stderr, time.Now().Format(time.RFC3339), s) },
 		Tools: tools, Heartbeat: 10 * time.Minute, RateN: rateN, RateS: 60 * time.Second}
+	if os.Getenv("TG_LOCAL_TTS") == "1" && strings.TrimSpace(os.Getenv("TG_OWNER_ID")) != "" && filepath.IsAbs(os.Getenv("TG_TTS_HELPER")) {
+		r.TTS = LocalTTS{Helper: os.Getenv("TG_TTS_HELPER")}
+		r.TTSOwner = strings.TrimSpace(os.Getenv("TG_OWNER_ID"))
+		fmt.Fprintln(os.Stderr, "local robotic speech: on (owner explicit /say only)")
+	}
 	fmt.Println("bot running", Version)
 	if err := r.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", redact(err.Error(), tok))

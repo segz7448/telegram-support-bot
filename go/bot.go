@@ -333,6 +333,8 @@ func validMessage(u map[string]any) (int64, string, bool) {
 }
 
 type Runner struct {
+	TTS         SpeechMaker
+	TTSOwner    string
 	T           Transport
 	API, Token  string
 	Brain       *Brain
@@ -717,7 +719,17 @@ func (r *Runner) Run() error {
 						call(r.T, r.API, r.Token, "sendChatAction", url.Values{"chat_id": {fmt.Sprint(cid)}, "action": {"typing"}}, 5)
 					}
 					var reply string
-					if r.Chat != nil {
+					if reply == "" && !sent {
+						if msg, handledSay := r.handleSay(cid, text); handledSay {
+							reply = msg
+							if msg == "" {
+								sent = true
+								replies++
+								r.Log("local robotic voice upload confirmed")
+							}
+						}
+					}
+					if r.Chat != nil && !sent && reply == "" {
 						var cr *ChessReply
 						okc := false
 						for _, gm := range r.Chat.Games {
